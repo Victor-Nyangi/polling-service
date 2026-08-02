@@ -1,5 +1,6 @@
 import { AppShell } from "@/components/app-shell";
 import { EmptyState } from "@/components/empty-state";
+import { LoadError } from "@/components/load-error";
 import { NoticeBanner } from "@/components/notice-banner";
 import { PollCard } from "@/components/poll-card";
 import { PollComposer } from "@/components/poll-composer";
@@ -56,13 +57,15 @@ export default async function HomePage({
         </div>
 
         <div className="grid gap-4">
-          {posts.length === 0 ? (
+          {posts.failed ? (
+            <LoadError what="the feed" />
+          ) : posts.data.length === 0 ? (
             <EmptyState
               title="No poll posts yet"
               description="Create the first poll post to start validating the core engagement loop."
             />
           ) : (
-            posts.map((post) => <PollCard key={post.id} post={post} />)
+            posts.data.map((post) => <PollCard key={post.id} post={post} />)
           )}
         </div>
       </div>

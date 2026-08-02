@@ -13,6 +13,7 @@ import type {
   AppNotification,
   CurrentUser,
   FeedPost,
+  Loaded,
   ModerationReport,
   PollOption,
 } from "@/lib/types";
@@ -31,16 +32,10 @@ function formatProfile(profile: Record<string, unknown> | null | undefined) {
   } as const;
 }
 
-function toVoteCount(
-  optionId: string,
-  votes: Array<Record<string, unknown>> | null | undefined,
-) {
-  return (votes ?? []).filter((vote) => vote.option_id === optionId).length;
-}
-
 function mapFeedPost(
   row: Record<string, unknown>,
-  viewerId?: string,
+  viewerId: string | undefined,
+  voteCounts: Map<string, number>,
 ): FeedPost | null {
   const pollRows = Array.isArray(row.poll) ? row.poll : [];
   const pollRow = pollRows[0] as Record<string, unknown> | undefined;
@@ -61,16 +56,19 @@ function mapFeedPost(
   const repostRows = Array.isArray(row.reposts)
     ? (row.reposts as Array<Record<string, unknown>>)
     : [];
-  const viewerVote = voteRows.find((vote) => vote.voter_id === viewerId);
+  // RLS restricts poll_votes to the viewer's own rows, so this is their vote
+  // and nobody else's. Tallies come from the aggregate view instead.
+  const viewerVote = voteRows[0];
   const viewerReaction = reactionRows.find((reaction) => reaction.user_id === viewerId);
   const options: PollOption[] = optionRows
     .map((option) => ({
       id: String(option.id),
       label: String(option.label ?? "Untitled option"),
       position: Number(option.position ?? 0),
-      votes: toVoteCount(String(option.id), voteRows),
+      votes: voteCounts.get(String(option.id)) ?? 0,
     }))
     .sort((left, right) => left.position - right.position);
+  const totalVotes = options.reduce((sum, option) => sum + option.votes, 0);
 
   return {
     id: String(row.id),
@@ -86,7 +84,7 @@ function mapFeedPost(
       question: String(pollRow.question ?? "Untitled poll"),
       status: pollRow.status === "closed" ? "closed" : "active",
       options,
-      totalVotes: voteRows.length,
+      totalVotes,
       viewerVoteOptionId:
         typeof viewerVote?.option_id === "string" ? viewerVote.option_id : undefined,
     },
@@ -157,9 +155,9 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
   };
 }
 
-export async function getFeedPosts(): Promise<FeedPost[]> {
+export async function getFeedPosts(): Promise<Loaded<FeedPost[]>> {
   if (!hasSupabasePublicEnv()) {
-    return demoFeedPosts;
+    return { data: demoFeedPosts, failed: false };
   }
 
   const currentUser = await getCurrentUser();
@@ -185,7 +183,7 @@ export async function getFeedPosts(): Promise<FeedPost[]> {
           question,
           status,
           poll_options ( id, label, position ),
-          poll_votes ( option_id, voter_id )
+          poll_votes ( option_id )
         ),
         reactions ( reaction_type, user_id ),
         reposts ( user_id )
@@ -195,38 +193,62 @@ export async function getFeedPosts(): Promise<FeedPost[]> {
     .limit(20);
 
   if (error || !data) {
-    return [];
+    return { data: [], failed: true };
   }
 
-  return data
-    .map((row) => mapFeedPost(row as Record<string, unknown>, currentUser?.id))
-    .filter((post): post is FeedPost => Boolean(post));
+  const rows = data as Array<Record<string, unknown>>;
+  const pollIds = rows
+    .flatMap((row) => (Array.isArray(row.poll) ? row.poll : []))
+    .map((poll) => String((poll as Record<string, unknown>).id ?? ""))
+    .filter(Boolean);
+
+  const voteCounts = new Map<string, number>();
+
+  if (pollIds.length > 0) {
+    const { data: countRows, error: countError } = await supabase
+      .from("poll_option_vote_counts")
+      .select("option_id, votes")
+      .in("poll_id", pollIds);
+
+    if (countError) {
+      return { data: [], failed: true };
+    }
+
+    for (const countRow of countRows ?? []) {
+      voteCounts.set(String(countRow.option_id), Number(countRow.votes ?? 0));
+    }
+  }
+
+  return {
+    data: rows
+      .map((row) => mapFeedPost(row, currentUser?.id, voteCounts))
+      .filter((post): post is FeedPost => Boolean(post)),
+    failed: false,
+  };
 }
 
-export async function getNotifications(): Promise<AppNotification[]> {
+export async function getNotifications(): Promise<Loaded<AppNotification[]>> {
   if (!hasSupabasePublicEnv()) {
-    return demoNotifications;
+    return { data: demoNotifications, failed: false };
   }
 
-  const currentUser = await getCurrentUser();
-
-  if (!currentUser) {
-    return [];
-  }
-
+  // Deliberately not gated on getCurrentUser(): it returns null both when the
+  // visitor is signed out and when the request to Supabase failed, which would
+  // render an outage as an empty inbox. RLS already scopes this to the
+  // recipient, so a signed-out visitor gets no rows and a real failure surfaces
+  // as an error instead.
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("notifications")
     .select("id, type, payload, created_at, read_at")
-    .eq("recipient_id", currentUser.id)
     .order("created_at", { ascending: false })
     .limit(30);
 
   if (error || !data) {
-    return [];
+    return { data: [], failed: true };
   }
 
-  return data.map((notification) => {
+  const notifications: AppNotification[] = data.map((notification) => {
     const payload =
       notification.payload && typeof notification.payload === "object"
         ? (notification.payload as Record<string, unknown>)
@@ -248,17 +270,23 @@ export async function getNotifications(): Promise<AppNotification[]> {
           : undefined,
     };
   });
+
+  return { data: notifications, failed: false };
 }
 
-export async function getModerationReports(): Promise<ModerationReport[]> {
+export async function getModerationReports(): Promise<Loaded<ModerationReport[]>> {
   if (!hasSupabasePublicEnv()) {
-    return demoReports;
+    return { data: demoReports, failed: false };
   }
 
   const currentUser = await getCurrentUser();
 
-  if (!currentUser || (currentUser.role !== "moderator" && currentUser.role !== "admin")) {
-    return [];
+  // Short-circuit only when we positively know the viewer is not staff. A null
+  // user is ambiguous — signed out, or the request failed — so let the query
+  // run and report a genuine failure. The "staff can read all reports" policy
+  // is the authoritative check either way.
+  if (currentUser && currentUser.role !== "moderator" && currentUser.role !== "admin") {
+    return { data: [], failed: false };
   }
 
   const supabase = await createClient();
@@ -280,10 +308,10 @@ export async function getModerationReports(): Promise<ModerationReport[]> {
     .limit(25);
 
   if (error || !data) {
-    return [];
+    return { data: [], failed: true };
   }
 
-  return data.map((report) => {
+  const reports: ModerationReport[] = data.map((report) => {
     const targetPost = Array.isArray(report.target_post)
       ? report.target_post[0]
       : report.target_post;
@@ -310,4 +338,6 @@ export async function getModerationReports(): Promise<ModerationReport[]> {
       createdAt: String(report.created_at ?? new Date().toISOString()),
     };
   });
+
+  return { data: reports, failed: false };
 }
