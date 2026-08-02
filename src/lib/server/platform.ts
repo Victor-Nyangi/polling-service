@@ -7,6 +7,7 @@ import {
   demoNotifications,
   demoReports,
 } from "@/lib/demo-data";
+import { renderNotification } from "@/lib/notifications";
 import { createClient } from "@/lib/supabase/server";
 import type {
   AppNotification,
@@ -129,7 +130,9 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("user_id, username, display_name, bio, avatar_url, interests, role")
+    .select(
+      "user_id, username, display_name, bio, avatar_url, interests, role, onboarded_at",
+    )
     .eq("user_id", user.id)
     .maybeSingle();
 
@@ -150,7 +153,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
       profile?.role === "moderator" || profile?.role === "admin"
         ? profile.role
         : "user",
-    needsOnboarding: !profile,
+    needsOnboarding: !profile?.onboarded_at,
   };
 }
 
@@ -228,12 +231,16 @@ export async function getNotifications(): Promise<AppNotification[]> {
       notification.payload && typeof notification.payload === "object"
         ? (notification.payload as Record<string, unknown>)
         : {};
+    const { title, body } = renderNotification(
+      String(notification.type),
+      payload,
+    );
 
     return {
       id: String(notification.id),
       type: String(notification.type),
-      title: String(payload.title ?? notification.type),
-      body: String(payload.body ?? "New platform activity"),
+      title,
+      body,
       createdAt: String(notification.created_at ?? new Date().toISOString()),
       readAt:
         typeof notification.read_at === "string"

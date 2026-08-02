@@ -192,6 +192,7 @@ export async function updateProfileAction(formData: FormData) {
     display_name: displayName,
     bio: bio || null,
     interests,
+    onboarded_at: new Date().toISOString(),
   });
 
   if (error) {
@@ -434,11 +435,12 @@ export async function markNotificationReadAction(formData: FormData) {
   const redirectTo = redirectTarget(formData, "/notifications");
   await requireConfigured(redirectTo);
   const notificationId = stringValue(formData, "notificationId");
-  const { supabase } = await requireAuthenticatedUser(redirectTo);
+  const { supabase, user } = await requireAuthenticatedUser(redirectTo);
   const { error } = await supabase
     .from("notifications")
     .update({ read_at: new Date().toISOString() })
-    .eq("id", notificationId);
+    .eq("id", notificationId)
+    .eq("recipient_id", user.id);
 
   if (error) {
     await redirectWithNotice(redirectTo, "error", error.message);
