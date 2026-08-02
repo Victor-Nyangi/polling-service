@@ -218,6 +218,16 @@ create policy "users can update their own profile"
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
 
+-- RLS policies are row-level only, and a table-level UPDATE grant covers every
+-- column. Without the revoke below, the "users can update their own profile"
+-- policy lets any signed-in user PATCH their own row with role = 'admin' (or
+-- is_suspended = false) straight against the REST API using the public anon
+-- key. Revoke the table-wide grant and hand back only the self-service columns.
+revoke update on public.profiles from anon, authenticated;
+
+grant update (user_id, username, display_name, bio, avatar_url, interests)
+  on public.profiles to authenticated;
+
 create policy "staff can read all reports"
   on public.reports
   for select

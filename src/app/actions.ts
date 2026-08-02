@@ -5,6 +5,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { hasSupabasePublicEnv } from "@/lib/env";
 import { buildNoticeHref } from "@/lib/notice";
+import { safeRedirectPath } from "@/lib/redirect";
 import { createClient } from "@/lib/supabase/server";
 
 function stringValue(formData: FormData, name: string) {
@@ -13,8 +14,7 @@ function stringValue(formData: FormData, name: string) {
 }
 
 function redirectTarget(formData: FormData, fallback = "/") {
-  const value = stringValue(formData, "redirectTo");
-  return value.startsWith("/") ? value : fallback;
+  return safeRedirectPath(stringValue(formData, "redirectTo"), fallback);
 }
 
 function toHashtags(value: string) {

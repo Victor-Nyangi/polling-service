@@ -1,3 +1,5 @@
+import { safeRedirectPath } from "@/lib/redirect";
+
 export type NoticeType = "success" | "error" | "info";
 
 export type Notice = {
@@ -42,7 +44,7 @@ export function buildNoticeHref(
   type: NoticeType,
   message: string,
 ) {
-  const target = redirectTo.startsWith("/") ? redirectTo : "/";
+  const target = safeRedirectPath(redirectTo);
   const params = new URLSearchParams({
     notice: type,
     message,

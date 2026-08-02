@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { hasSupabasePublicEnv } from "@/lib/env";
+import { safeRedirectPath } from "@/lib/redirect";
 import { createClient } from "@/lib/supabase/server";
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
-  const next = url.searchParams.get("next");
-  const safeNext = next && next.startsWith("/") ? next : "/";
+  const safeNext = safeRedirectPath(url.searchParams.get("next"));
 
   if (!hasSupabasePublicEnv()) {
     return NextResponse.redirect(
