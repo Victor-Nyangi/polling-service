@@ -11,9 +11,17 @@ export async function createClient() {
       getAll() {
         return cookieStore.getAll();
       },
-      setAll() {
-        // Server Components can read auth state, but cookie writes belong in
-        // route handlers or middleware when auth mutations are implemented.
+      setAll(cookiesToSet) {
+        try {
+          for (const { name, value, options } of cookiesToSet) {
+            cookieStore.set(name, value, options);
+          }
+        } catch {
+          // Cookie writes are rejected during Server Component rendering. Sign
+          // in/out and the auth callback run in Server Actions and route
+          // handlers, where the writes above succeed; for plain page renders
+          // `proxy.ts` has already rotated the session cookies.
+        }
       },
     },
   });
