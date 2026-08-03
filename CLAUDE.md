@@ -11,9 +11,13 @@ npm run dev        # local dev server
 npm run build      # production build
 npm run lint       # eslint (flat config, eslint-config-next)
 npm run typecheck  # tsc --noEmit
+npm test           # vitest run (single pass)
+npm run test:watch # vitest (watch mode)
 ```
 
-There is no test framework configured. `lint` + `typecheck` + `build` are the verification gates.
+`lint` + `typecheck` + `test` + `build` are the verification gates, and `.github/workflows/ci.yml` runs all four on every pull request.
+
+Tests are Vitest, colocated as `src/**/*.test.ts`, and cover only the pure helpers in `src/lib` — Vitest does not support async Server Components, and this codebase is almost entirely async Server Components, so anything touching a page, a component, or Supabase belongs in an end-to-end runner instead. There is deliberately no jsdom environment. When adding a helper to `src/lib`, add its unit test; when adding a page or action, rely on the other three gates.
 
 Database changes are applied by pasting `supabase/schema.sql` into the Supabase SQL editor — there is no migration tool. The file is written to be idempotent (`create ... if not exists`, `drop policy if exists` before every `create policy`, `do $$` guards for constraints), so keep new statements re-runnable rather than adding one-shot DDL.
 
