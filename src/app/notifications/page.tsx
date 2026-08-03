@@ -1,6 +1,7 @@
 import { markNotificationReadAction } from "@/app/actions";
 import { AppShell } from "@/components/app-shell";
 import { EmptyState } from "@/components/empty-state";
+import { LoadError } from "@/components/load-error";
 import { NoticeBanner } from "@/components/notice-banner";
 import { readNotice } from "@/lib/notice";
 import { getCurrentUser, getNotifications } from "@/lib/server/platform";
@@ -37,14 +38,16 @@ export default async function NotificationsPage({
 
       <NoticeBanner notice={notice} />
 
-      {notifications.length === 0 ? (
+      {notifications.failed ? (
+        <LoadError what="your notifications" />
+      ) : notifications.data.length === 0 ? (
         <EmptyState
           title="No notifications yet"
           description="New votes, reposts, and moderation events will show up here."
         />
       ) : (
         <div className="grid gap-4">
-          {notifications.map((notification) => (
+          {notifications.data.map((notification) => (
             <article
               key={notification.id}
               className="rounded-3xl border border-border bg-card p-6 shadow-sm"

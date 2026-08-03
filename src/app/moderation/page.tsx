@@ -1,6 +1,7 @@
 import { reviewReportAction } from "@/app/actions";
 import { AppShell } from "@/components/app-shell";
 import { EmptyState } from "@/components/empty-state";
+import { LoadError } from "@/components/load-error";
 import { NoticeBanner } from "@/components/notice-banner";
 import { readNotice } from "@/lib/notice";
 import { getCurrentUser, getModerationReports } from "@/lib/server/platform";
@@ -37,14 +38,16 @@ export default async function ModerationPage({
 
       <NoticeBanner notice={notice} />
 
-      {reports.length === 0 ? (
+      {reports.failed ? (
+        <LoadError what="the moderation queue" />
+      ) : reports.data.length === 0 ? (
         <EmptyState
           title="No reports queued"
           description="Submitted content and user reports will appear here for moderator review."
         />
       ) : (
         <div className="grid gap-4">
-          {reports.map((report) => (
+          {reports.data.map((report) => (
             <article
               key={report.id}
               className="rounded-3xl border border-border bg-card p-6 shadow-sm"

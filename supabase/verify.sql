@@ -186,6 +186,26 @@ begin
     raise exception 'authenticated must not hold UPDATE on profiles.role';
   end if;
 
+  ----------------------------------------------------------------------------
+  -- Ballot secrecy: tallies are public, voter identity is not
+  ----------------------------------------------------------------------------
+  select votes into v_count
+  from public.poll_option_vote_counts
+  where option_id = v_option_a;
+  if v_count <> 1 then
+    raise exception 'expected the aggregate view to report 1 vote, got %', v_count;
+  end if;
+
+  if exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'poll_votes'
+      and cmd = 'SELECT'
+      and qual = 'true'
+  ) then
+    raise exception 'poll_votes must not be publicly readable';
+  end if;
+
   raise notice 'verify.sql: all assertions passed';
 end
 $$;

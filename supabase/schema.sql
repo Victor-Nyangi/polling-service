@@ -125,6 +125,23 @@ create unique index if not exists notifications_engagement_dedupe_idx
   on public.notifications (recipient_id, actor_id, post_id, type)
   where type in ('poll_vote', 'post_reaction', 'post_repost');
 
+-- Aggregate tallies for the feed. security_invoker = false is deliberate: the
+-- view runs as its owner and so bypasses the row-level policy on poll_votes,
+-- exposing totals without ever exposing voter_id. This is what lets results be
+-- public while ballots stay secret.
+drop view if exists public.poll_option_vote_counts;
+create view public.poll_option_vote_counts
+with (security_invoker = false) as
+select
+  po.poll_id,
+  po.id as option_id,
+  count(pv.id) as votes
+from public.poll_options as po
+left join public.poll_votes as pv on pv.option_id = po.id
+group by po.poll_id, po.id;
+
+grant select on public.poll_option_vote_counts to anon, authenticated;
+
 alter table public.posts drop constraint if exists posts_body_or_image_check;
 
 create or replace function public.set_updated_at()
@@ -455,6 +472,7 @@ drop policy if exists "authors can create polls for their posts" on public.polls
 drop policy if exists "poll options are public to read" on public.poll_options;
 drop policy if exists "authors can create poll options" on public.poll_options;
 drop policy if exists "votes are public to read" on public.poll_votes;
+drop policy if exists "users can read their own votes" on public.poll_votes;
 drop policy if exists "users can vote once as themselves" on public.poll_votes;
 drop policy if exists "reactions are public to read" on public.reactions;
 drop policy if exists "users can react as themselves" on public.reactions;
@@ -576,10 +594,12 @@ create policy "authors can create poll options"
     )
   );
 
-create policy "votes are public to read"
+-- Ballot secrecy: voter_id must not be publicly readable. Voters can see only
+-- their own row, which is all the feed needs to highlight the viewer's choice.
+create policy "users can read their own votes"
   on public.poll_votes
   for select
-  using (true);
+  using (auth.uid() = voter_id);
 
 create policy "users can vote once as themselves"
   on public.poll_votes
