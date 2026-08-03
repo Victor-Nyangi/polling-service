@@ -40,7 +40,10 @@ npm run dev
 - `npm run dev` — local development
 - `npm run lint` — ESLint
 - `npm run typecheck` — TypeScript checks
+- `npm test` — Vitest unit tests (`npm run test:watch` to watch)
 - `npm run build` — production build
+
+All four checks run on every pull request via `.github/workflows/ci.yml`.
 
 ## Initial MVP priorities
 
