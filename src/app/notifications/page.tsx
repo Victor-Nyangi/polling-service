@@ -29,7 +29,9 @@ export default async function NotificationsPage({
   return (
     <AppShell currentUser={currentUser}>
       <section className="rounded-3xl border border-border bg-card p-6 shadow-sm">
-        <h1 className="text-3xl font-semibold tracking-tight">Notifications</h1>
+        <h1 className="font-display text-3xl font-semibold tracking-tight">
+          Notifications
+        </h1>
         <p className="mt-3 text-sm text-muted">
           In-app notifications are the cheapest MVP starting point before web push
           or native push integrations.
@@ -54,15 +56,19 @@ export default async function NotificationsPage({
             >
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <h2 className="text-lg font-semibold">{notification.title}</h2>
+                  <h2 className="font-display text-lg font-semibold">
+                    {notification.title}
+                  </h2>
                   <p className="mt-2 text-sm text-muted">{notification.body}</p>
                 </div>
-                <span className="rounded-full bg-background px-3 py-1 text-xs font-medium uppercase tracking-wide text-muted">
+                <span className="rounded-full bg-background px-3 py-1 font-mono text-xs font-medium uppercase tracking-wide text-muted">
                   {notification.readAt ? "Read" : "Unread"}
                 </span>
               </div>
               <div className="mt-4 flex items-center justify-between gap-4">
-                <p className="text-xs text-muted">{timestamp(notification.createdAt)}</p>
+                <p className="font-mono text-xs text-muted">
+                  {timestamp(notification.createdAt)}
+                </p>
                 {!notification.readAt ? (
                   <form action={markNotificationReadAction}>
                     <input type="hidden" name="redirectTo" value="/notifications" />
@@ -71,7 +77,7 @@ export default async function NotificationsPage({
                       name="notificationId"
                       value={notification.id}
                     />
-                    <button className="rounded-full border border-border px-4 py-2 text-sm font-medium">
+                    <button className="rounded-full border border-border px-4 py-2 text-sm font-medium transition active:scale-[0.97]">
                       Mark as read
                     </button>
                   </form>
