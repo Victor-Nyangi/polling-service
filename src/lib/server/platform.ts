@@ -282,7 +282,7 @@ export async function getModerationReports(): Promise<Loaded<ModerationReport[]>
   const currentUser = await getCurrentUser();
 
   // Short-circuit only when we positively know the viewer is not staff. A null
-  // user is ambiguous — signed out, or the request failed — so let the query
+  // user is ambiguous (signed out, or the request failed), so let the query
   // run and report a genuine failure. The "staff can read all reports" policy
   // is the authoritative check either way.
   if (currentUser && currentUser.role !== "moderator" && currentUser.role !== "admin") {

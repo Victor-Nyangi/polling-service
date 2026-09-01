@@ -27,11 +27,11 @@ export function PollCard({ post }: { post: FeedPost }) {
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="font-semibold">{post.author.displayName}</p>
-          <p className="text-sm text-muted">
+          <p className="font-mono text-sm text-muted">
             @{post.author.username} · {formatDate(post.createdAt)}
           </p>
         </div>
-        <span className="rounded-full bg-background px-3 py-1 text-xs font-medium uppercase tracking-wide text-muted">
+        <span className="rounded-full bg-background px-3 py-1 font-mono text-xs font-medium uppercase tracking-wide text-muted">
           {post.author.role}
         </span>
       </div>
@@ -47,10 +47,12 @@ export function PollCard({ post }: { post: FeedPost }) {
       ) : null}
 
       <div className="mt-5 rounded-2xl border border-border bg-background p-4">
-        <p className="text-sm font-medium uppercase tracking-wide text-muted">
+        <p className="font-mono text-sm font-medium uppercase tracking-wide text-muted">
           Poll
         </p>
-        <h3 className="mt-2 text-lg font-semibold">{post.poll.question}</h3>
+        <h3 className="mt-2 font-display text-lg font-semibold">
+          {post.poll.question}
+        </h3>
         <div className="mt-4 grid gap-3">
           {post.poll.options.map((option) => {
             const isSelected = post.poll.viewerVoteOptionId === option.id;
@@ -62,15 +64,15 @@ export function PollCard({ post }: { post: FeedPost }) {
                 <input type="hidden" name="optionId" value={option.id} />
                 <button
                   type="submit"
-                  className={`rounded-2xl border px-4 py-3 text-left transition ${
+                  className={`rounded-2xl border px-4 py-3 text-left transition active:scale-[0.99] ${
                     isSelected
-                      ? "border-accent bg-violet-50"
+                      ? "border-accent bg-accent/10"
                       : "border-border bg-card hover:border-accent/50"
                   }`}
                 >
                   <div className="flex items-center justify-between gap-4">
                     <span>{option.label}</span>
-                    <span className="text-sm text-muted">
+                    <span className="font-mono text-sm text-muted">
                       {option.votes} votes · {votePercentage(post, option.votes)}%
                     </span>
                   </div>
@@ -86,7 +88,7 @@ export function PollCard({ post }: { post: FeedPost }) {
           <input type="hidden" name="redirectTo" value="/" />
           <input type="hidden" name="postId" value={post.id} />
           <input type="hidden" name="reactionType" value="like" />
-          <button className="rounded-full border border-border px-4 py-2">
+          <button className="rounded-full border border-border px-4 py-2 transition active:scale-[0.96]">
             👍 {post.reactions.likes}
           </button>
         </form>
@@ -95,7 +97,7 @@ export function PollCard({ post }: { post: FeedPost }) {
           <input type="hidden" name="redirectTo" value="/" />
           <input type="hidden" name="postId" value={post.id} />
           <input type="hidden" name="reactionType" value="dislike" />
-          <button className="rounded-full border border-border px-4 py-2">
+          <button className="rounded-full border border-border px-4 py-2 transition active:scale-[0.96]">
             👎 {post.reactions.dislikes}
           </button>
         </form>
@@ -103,7 +105,7 @@ export function PollCard({ post }: { post: FeedPost }) {
         <form action={toggleRepostAction}>
           <input type="hidden" name="redirectTo" value="/" />
           <input type="hidden" name="postId" value={post.id} />
-          <button className="rounded-full border border-border px-4 py-2">
+          <button className="rounded-full border border-border px-4 py-2 transition active:scale-[0.96]">
             🔁 {post.reposts.viewerHasReposted ? "Reposted" : "Repost"} ·{" "}
             {post.reposts.count}
           </button>
@@ -118,7 +120,7 @@ export function PollCard({ post }: { post: FeedPost }) {
             name="reason"
             value="Reported from the feed quick-action flow."
           />
-          <button className="rounded-full border border-border px-4 py-2">
+          <button className="rounded-full border border-border px-4 py-2 transition hover:border-accent/50 active:scale-[0.96]">
             Report
           </button>
         </form>

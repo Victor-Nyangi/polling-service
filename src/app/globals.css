@@ -1,12 +1,23 @@
 @import "tailwindcss";
 
+/*
+ * Accent: deep rose / garnet (hue ~347, desaturated below 80%).
+ * Chosen deliberately to replace the prior violet-600/800 accent, which
+ * matched the generic "AI purple" palette. Two roles, not one shade:
+ *   --accent        text, links, borders, low-opacity badges (tuned for
+ *                   contrast as foreground colour against the page).
+ *   --accent-strong solid button fills paired with white label text (tuned
+ *                   for contrast as a background colour).
+ * A single rose value cannot satisfy both roles at once against a near-black
+ * dark background, so the two tokens stay distinct in dark mode.
+ */
 :root {
   --background: #f4f4f5;
   --foreground: #18181b;
   --card: #ffffff;
   --muted: #71717a;
-  --accent: #7c3aed;
-  --accent-strong: #5b21b6;
+  --accent: #a6304a;
+  --accent-strong: #7d2439;
   --border: #e4e4e7;
 }
 
@@ -20,6 +31,7 @@
   --color-border: var(--border);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --font-display: var(--font-outfit);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -28,8 +40,8 @@
     --foreground: #fafafa;
     --card: #18181b;
     --muted: #a1a1aa;
-    --accent: #a78bfa;
-    --accent-strong: #8b5cf6;
+    --accent: #d8748d;
+    --accent-strong: #cc3354;
     --border: #27272a;
   }
 }

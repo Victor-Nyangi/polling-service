@@ -2,7 +2,7 @@ export type AppRole = "user" | "moderator" | "admin";
 
 /**
  * Result of a server-side read. `failed` distinguishes "the query errored"
- * from "there is genuinely nothing here" — collapsing both into an empty
+ * from "there is genuinely nothing here". Collapsing both into an empty
  * array makes a backend outage look identical to an empty feed.
  */
 export type Loaded<T> = {

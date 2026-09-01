@@ -29,7 +29,9 @@ export default async function ModerationPage({
   return (
     <AppShell currentUser={currentUser}>
       <section className="rounded-3xl border border-border bg-card p-6 shadow-sm">
-        <h1 className="text-3xl font-semibold tracking-tight">Moderation queue</h1>
+        <h1 className="font-display text-3xl font-semibold tracking-tight">
+          Moderation queue
+        </h1>
         <p className="mt-3 text-sm text-muted">
           Basic reporting and review gives the MVP enough trust-and-safety support
           without building a complex moderation suite too early.
@@ -54,25 +56,29 @@ export default async function ModerationPage({
             >
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <h2 className="text-lg font-semibold">{report.targetLabel}</h2>
+                  <h2 className="font-display text-lg font-semibold">
+                    {report.targetLabel}
+                  </h2>
                   <p className="mt-2 text-sm text-muted">
                     Reported by @{report.reporterLabel}
                   </p>
                 </div>
-                <span className="rounded-full bg-background px-3 py-1 text-xs font-medium uppercase tracking-wide text-muted">
+                <span className="rounded-full bg-background px-3 py-1 font-mono text-xs font-medium uppercase tracking-wide text-muted">
                   {report.status}
                 </span>
               </div>
 
               <p className="mt-4 text-sm leading-7">{report.reason}</p>
               <div className="mt-4 flex flex-wrap items-center justify-between gap-4">
-                <p className="text-xs text-muted">{timestamp(report.createdAt)}</p>
+                <p className="font-mono text-xs text-muted">
+                  {timestamp(report.createdAt)}
+                </p>
                 <div className="flex gap-3">
                   <form action={reviewReportAction}>
                     <input type="hidden" name="redirectTo" value="/moderation" />
                     <input type="hidden" name="reportId" value={report.id} />
                     <input type="hidden" name="status" value="reviewed" />
-                    <button className="rounded-full border border-border px-4 py-2 text-sm font-medium">
+                    <button className="rounded-full border border-border px-4 py-2 text-sm font-medium transition active:scale-[0.97]">
                       Mark reviewed
                     </button>
                   </form>
@@ -81,7 +87,7 @@ export default async function ModerationPage({
                     <input type="hidden" name="redirectTo" value="/moderation" />
                     <input type="hidden" name="reportId" value={report.id} />
                     <input type="hidden" name="status" value="closed" />
-                    <button className="rounded-full bg-accent px-4 py-2 text-sm font-medium text-white">
+                    <button className="rounded-full bg-accent-strong px-4 py-2 text-sm font-medium text-white transition hover:brightness-95 active:scale-[0.97]">
                       Close report
                     </button>
                   </form>

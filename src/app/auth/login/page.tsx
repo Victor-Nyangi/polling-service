@@ -20,7 +20,9 @@ export default async function LoginPage({
   return (
     <AppShell currentUser={currentUser}>
       <div className="mx-auto w-full max-w-xl rounded-3xl border border-border bg-card p-8 shadow-sm">
-        <h1 className="text-3xl font-semibold tracking-tight">Sign in</h1>
+        <h1 className="font-display text-3xl font-semibold tracking-tight">
+          Sign in
+        </h1>
         <p className="mt-3 text-sm text-muted">
           Start with email/password or a single social provider for the simplest
           MVP auth stack.
@@ -35,23 +37,23 @@ export default async function LoginPage({
             name="email"
             type="email"
             placeholder="Email address"
-            className="rounded-2xl border border-border bg-background px-4 py-3 outline-none focus:border-accent"
+            className="rounded-2xl border border-border bg-background px-4 py-3 outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/15"
             required
           />
           <input
             name="password"
             type="password"
             placeholder="Password"
-            className="rounded-2xl border border-border bg-background px-4 py-3 outline-none focus:border-accent"
+            className="rounded-2xl border border-border bg-background px-4 py-3 outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/15"
             required
           />
-          <button className="rounded-full bg-accent px-5 py-3 font-medium text-white">
+          <button className="rounded-full bg-accent-strong px-5 py-3 font-medium text-white transition hover:brightness-95 active:scale-[0.98]">
             Sign in
           </button>
         </form>
 
         <form action={signInWithGoogleAction} className="mt-3">
-          <button className="w-full rounded-full border border-border px-5 py-3 font-medium">
+          <button className="w-full rounded-full border border-border px-5 py-3 font-medium transition active:scale-[0.98]">
             Continue with Google
           </button>
         </form>

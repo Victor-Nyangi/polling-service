@@ -5,13 +5,13 @@ export function PollComposer({ currentUser }: { currentUser: CurrentUser | null 
   return (
     <section className="rounded-3xl border border-border bg-card p-6 shadow-sm">
       <div className="flex flex-col gap-2">
-        <h2 className="text-xl font-semibold">Create a poll post</h2>
+        <h2 className="font-display text-xl font-semibold">Create a poll post</h2>
         <p className="text-sm text-muted">
           Keep the MVP focused: one clear question, 2-4 options, optional context,
           and hashtags for discovery later.
         </p>
         {currentUser ? (
-          <p className="text-xs uppercase tracking-wide text-muted">
+          <p className="font-mono text-xs uppercase tracking-wide text-muted">
             Posting as @{currentUser.username}
           </p>
         ) : null}
@@ -23,42 +23,42 @@ export function PollComposer({ currentUser }: { currentUser: CurrentUser | null 
           name="body"
           rows={4}
           placeholder="Add context for your poll..."
-          className="rounded-2xl border border-border bg-background px-4 py-3 outline-none focus:border-accent"
+          className="rounded-2xl border border-border bg-background px-4 py-3 outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/15"
         />
         <input
           name="question"
           placeholder="Poll question"
-          className="rounded-2xl border border-border bg-background px-4 py-3 outline-none focus:border-accent"
+          className="rounded-2xl border border-border bg-background px-4 py-3 outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/15"
           required
         />
         <div className="grid gap-3 md:grid-cols-2">
           <input
             name="option1"
             placeholder="Option 1"
-            className="rounded-2xl border border-border bg-background px-4 py-3 outline-none focus:border-accent"
+            className="rounded-2xl border border-border bg-background px-4 py-3 outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/15"
             required
           />
           <input
             name="option2"
             placeholder="Option 2"
-            className="rounded-2xl border border-border bg-background px-4 py-3 outline-none focus:border-accent"
+            className="rounded-2xl border border-border bg-background px-4 py-3 outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/15"
             required
           />
           <input
             name="option3"
             placeholder="Option 3 (optional)"
-            className="rounded-2xl border border-border bg-background px-4 py-3 outline-none focus:border-accent"
+            className="rounded-2xl border border-border bg-background px-4 py-3 outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/15"
           />
           <input
             name="option4"
             placeholder="Option 4 (optional)"
-            className="rounded-2xl border border-border bg-background px-4 py-3 outline-none focus:border-accent"
+            className="rounded-2xl border border-border bg-background px-4 py-3 outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/15"
           />
         </div>
         <input
           name="hashtags"
           placeholder="Hashtags, comma-separated"
-          className="rounded-2xl border border-border bg-background px-4 py-3 outline-none focus:border-accent"
+          className="rounded-2xl border border-border bg-background px-4 py-3 outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/15"
         />
         <div className="flex items-center justify-between gap-4">
           <p className="text-xs text-muted">
@@ -67,7 +67,7 @@ export function PollComposer({ currentUser }: { currentUser: CurrentUser | null 
           </p>
           <button
             type="submit"
-            className="rounded-full bg-accent px-5 py-3 text-sm font-medium text-white transition hover:bg-accent-strong"
+            className="rounded-full bg-accent-strong px-5 py-3 text-sm font-medium text-white transition hover:brightness-95 active:scale-[0.98]"
           >
             Publish poll
           </button>
