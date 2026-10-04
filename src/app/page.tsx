@@ -1,7 +1,9 @@
+import { Suspense } from "react";
 import { AppShell } from "@/components/app-shell";
 import { EmptyState } from "@/components/empty-state";
 import { LoadError } from "@/components/load-error";
 import { NoticeBanner } from "@/components/notice-banner";
+import { PageSkeleton } from "@/components/page-skeleton";
 import { PollCard } from "@/components/poll-card";
 import { PollComposer } from "@/components/poll-composer";
 import { readNotice } from "@/lib/notice";
@@ -9,11 +11,27 @@ import { getCurrentUser, getFeedPosts } from "@/lib/server/platform";
 
 export const dynamic = "force-dynamic";
 
-export default async function HomePage({
-  searchParams,
-}: {
+type HomePageProps = {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
-}) {
+};
+
+/**
+ * `/` is the only route without its own `loading.tsx`, and it deliberately
+ * stays that way: a `loading.tsx` here would create a Suspense boundary over
+ * every nested segment, flushing a 200 shell before `/p/[postId]` and
+ * `/u/[username]` can resolve their data — which is what made `notFound()`
+ * in those routes return 200. Keeping the boundary inside this file gives the
+ * feed its streaming skeleton without putting one above the permalink routes.
+ */
+export default function HomePage({ searchParams }: HomePageProps) {
+  return (
+    <Suspense fallback={<PageSkeleton cardCount={3} />}>
+      <Feed searchParams={searchParams} />
+    </Suspense>
+  );
+}
+
+async function Feed({ searchParams }: HomePageProps) {
   const [notice, currentUser, posts] = await Promise.all([
     readNotice(searchParams),
     getCurrentUser(),
