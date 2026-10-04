@@ -3,6 +3,7 @@ import type {
   CurrentUser,
   FeedPost,
   ModerationReport,
+  PublicProfile,
 } from "@/lib/types";
 
 export const demoCurrentUser: CurrentUser = {
@@ -79,6 +80,29 @@ export const demoFeedPosts: FeedPost[] = [
       count: 2,
       viewerHasReposted: false,
     },
+  },
+];
+
+/**
+ * One entry per author in `demoFeedPosts`, so `/u/[username]` has something to
+ * render without Supabase env vars.
+ */
+export const demoProfiles: PublicProfile[] = [
+  {
+    id: "demo-user-1",
+    username: "creator",
+    displayName: "Victor Creator",
+    bio: "Testing the first MVP loop for poll-based social posts.",
+    role: "admin",
+    joinedAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 42).toISOString(),
+  },
+  {
+    id: "demo-user-2",
+    username: "opsally",
+    displayName: "Sally Ops",
+    bio: "Keeping the moderation queue short and the hosting bill shorter.",
+    role: "moderator",
+    joinedAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 19).toISOString(),
   },
 ];
 

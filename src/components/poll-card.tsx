@@ -1,3 +1,4 @@
+import Link from "next/link";
 import {
   createReportAction,
   setReactionAction,
@@ -21,14 +22,37 @@ function votePercentage(post: FeedPost, optionVotes: number) {
   return Math.round((optionVotes / post.poll.totalVotes) * 100);
 }
 
-export function PollCard({ post }: { post: FeedPost }) {
+/**
+ * `redirectTo` is where the engagement actions send the visitor afterwards, so
+ * a vote cast on `/p/[postId]` comes back to that permalink instead of the
+ * feed. Every form already carries it; the default keeps the feed unchanged.
+ */
+export function PollCard({
+  post,
+  redirectTo = "/",
+}: {
+  post: FeedPost;
+  redirectTo?: string;
+}) {
   return (
     <article className="rounded-3xl border border-border bg-card p-6 shadow-sm">
       <div className="flex items-start justify-between gap-4">
         <div>
           <p className="font-semibold">{post.author.displayName}</p>
           <p className="font-mono text-sm text-muted">
-            @{post.author.username} · {formatDate(post.createdAt)}
+            <Link
+              href={`/u/${post.author.username}`}
+              className="transition hover:text-accent"
+            >
+              @{post.author.username}
+            </Link>{" "}
+            ·{" "}
+            <Link
+              href={`/p/${post.id}`}
+              className="transition hover:text-accent"
+            >
+              {formatDate(post.createdAt)}
+            </Link>
           </p>
         </div>
         <span className="rounded-full bg-background px-3 py-1 font-mono text-xs font-medium uppercase tracking-wide text-muted">
@@ -59,7 +83,7 @@ export function PollCard({ post }: { post: FeedPost }) {
 
             return (
               <form key={option.id} action={voteOnPollAction} className="grid gap-2">
-                <input type="hidden" name="redirectTo" value="/" />
+                <input type="hidden" name="redirectTo" value={redirectTo} />
                 <input type="hidden" name="pollId" value={post.poll.id} />
                 <input type="hidden" name="optionId" value={option.id} />
                 <button
@@ -85,7 +109,7 @@ export function PollCard({ post }: { post: FeedPost }) {
 
       <div className="mt-5 flex flex-wrap gap-3 text-sm">
         <form action={setReactionAction}>
-          <input type="hidden" name="redirectTo" value="/" />
+          <input type="hidden" name="redirectTo" value={redirectTo} />
           <input type="hidden" name="postId" value={post.id} />
           <input type="hidden" name="reactionType" value="like" />
           <button className="rounded-full border border-border px-4 py-2 transition active:scale-[0.96]">
@@ -94,7 +118,7 @@ export function PollCard({ post }: { post: FeedPost }) {
         </form>
 
         <form action={setReactionAction}>
-          <input type="hidden" name="redirectTo" value="/" />
+          <input type="hidden" name="redirectTo" value={redirectTo} />
           <input type="hidden" name="postId" value={post.id} />
           <input type="hidden" name="reactionType" value="dislike" />
           <button className="rounded-full border border-border px-4 py-2 transition active:scale-[0.96]">
@@ -103,7 +127,7 @@ export function PollCard({ post }: { post: FeedPost }) {
         </form>
 
         <form action={toggleRepostAction}>
-          <input type="hidden" name="redirectTo" value="/" />
+          <input type="hidden" name="redirectTo" value={redirectTo} />
           <input type="hidden" name="postId" value={post.id} />
           <button className="rounded-full border border-border px-4 py-2 transition active:scale-[0.96]">
             🔁 {post.reposts.viewerHasReposted ? "Reposted" : "Repost"} ·{" "}
@@ -112,7 +136,7 @@ export function PollCard({ post }: { post: FeedPost }) {
         </form>
 
         <form action={createReportAction}>
-          <input type="hidden" name="redirectTo" value="/" />
+          <input type="hidden" name="redirectTo" value={redirectTo} />
           <input type="hidden" name="targetType" value="post" />
           <input type="hidden" name="targetPostId" value={post.id} />
           <input

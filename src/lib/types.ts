@@ -61,6 +61,26 @@ export type FeedPost = {
   };
 };
 
+/**
+ * The author shape used inside `FeedPost`, plus the two fields a standalone
+ * public profile page needs. Signed-out visitors see exactly this — never
+ * `CurrentUser`, which carries the viewer's email and onboarding state.
+ */
+export type PublicProfile = {
+  id: string;
+  username: string;
+  displayName: string;
+  avatarUrl?: string;
+  role: AppRole;
+  bio?: string;
+  joinedAt: string;
+};
+
+export type PublicProfilePage = {
+  profile: PublicProfile;
+  posts: FeedPost[];
+};
+
 export type AppNotification = {
   id: string;
   type: string;

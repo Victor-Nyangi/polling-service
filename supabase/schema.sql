@@ -188,8 +188,12 @@ begin
     base_username := 'user';
   end if;
 
+  -- 11 + '_' + 8 = 20 characters, the maximum allowed by the
+  -- profiles_username_format constraint further down this file. Widening the
+  -- local-part slice without widening the constraint makes sign-up fail for
+  -- anyone with a long email local part.
   candidate_username :=
-    left(base_username, 20) || '_' || left(replace(new.id::text, '-', ''), 8);
+    left(base_username, 11) || '_' || left(replace(new.id::text, '-', ''), 8);
 
   seeded_display_name := coalesce(
     new.raw_user_meta_data ->> 'display_name',
@@ -206,10 +210,12 @@ begin
       -- Username collision only. Fall back to a value that cannot collide.
       -- Deliberately not `when others`: swallowing every error would recreate
       -- the profile-less-user bug this trigger exists to prevent.
+      -- 'u_' + 18 hex characters of the user's uuid = 20 characters, the
+      -- maximum the profiles_username_format constraint allows.
       insert into public.profiles (user_id, username, display_name)
       values (
         new.id,
-        'user_' || replace(new.id::text, '-', ''),
+        'u_' || left(replace(new.id::text, '-', ''), 18),
         seeded_display_name
       )
       on conflict (user_id) do nothing;
@@ -240,7 +246,7 @@ select
       ),
       'user'
     ),
-    20
+    11
   ) || '_' || left(replace(u.id::text, '-', ''), 8),
   coalesce(
     u.raw_user_meta_data ->> 'display_name',
@@ -443,6 +449,30 @@ begin
       foreign key (option_id, poll_id)
       references public.poll_options (id, poll_id)
       on delete cascade;
+  end if;
+end
+$$;
+
+-- The username is rendered as `@{username}` throughout the UI and is the
+-- `/u/[username]` path segment, so a stored `@handle` renders as `@@handle` and
+-- anything outside `[a-z0-9_]` is not safely linkable. `validateUsername()` in
+-- `src/lib/username.ts` enforces the same rule in the app; this is the
+-- backstop, because the column was previously a bare `text not null unique`.
+--
+-- Pre-flight: this ALTER fails if any existing row violates the pattern. Run
+--   select user_id, username from public.profiles
+--   where username !~ '^[a-z0-9_]{3,20}$';
+-- and fix those rows before applying this file.
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'profiles_username_format'
+  ) then
+    alter table public.profiles
+      add constraint profiles_username_format
+      check (username ~ '^[a-z0-9_]{3,20}$');
   end if;
 end
 $$;

@@ -7,6 +7,7 @@ import { hasSupabasePublicEnv } from "@/lib/env";
 import { buildNoticeHref } from "@/lib/notice";
 import { safeRedirectPath } from "@/lib/redirect";
 import { createClient } from "@/lib/supabase/server";
+import { validateUsername } from "@/lib/username";
 
 function stringValue(formData: FormData, name: string) {
   const value = formData.get(name);
@@ -185,10 +186,22 @@ export async function updateProfileAction(formData: FormData) {
     );
   }
 
+  // `handle_new_user()` seeds a safe `[a-z0-9_]` handle at sign-up and this
+  // form is what overwrites it, so the format rule has to be enforced here or
+  // not at all. A leading `@` and uppercase are normalised silently; anything
+  // else is rejected with a message rather than rewritten into a handle the
+  // user did not choose.
+  const usernameCheck = validateUsername(username);
+
+  if (!usernameCheck.ok) {
+    await redirectWithNotice(redirectTo, "error", usernameCheck.message);
+    throw new Error("Invalid username survived the redirect guard.");
+  }
+
   const { supabase, user } = await requireAuthenticatedUser(redirectTo);
   const { error } = await supabase.from("profiles").upsert({
     user_id: user.id,
-    username,
+    username: usernameCheck.username,
     display_name: displayName,
     bio: bio || null,
     interests,
@@ -317,7 +330,7 @@ export async function voteOnPollAction(formData: FormData) {
   }
 
   revalidatePath("/");
-  redirect(buildNoticeHref("/", "success", "Vote recorded."));
+  redirect(buildNoticeHref(redirectTo, "success", "Vote recorded."));
 }
 
 export async function setReactionAction(formData: FormData) {
@@ -346,7 +359,7 @@ export async function setReactionAction(formData: FormData) {
     }
 
     revalidatePath("/");
-    redirect(buildNoticeHref("/", "success", "Reaction removed."));
+    redirect(buildNoticeHref(redirectTo, "success", "Reaction removed."));
   }
 
   const { error } = await supabase.from("reactions").upsert(
@@ -363,7 +376,7 @@ export async function setReactionAction(formData: FormData) {
   }
 
   revalidatePath("/");
-  redirect(buildNoticeHref("/", "success", "Reaction updated."));
+  redirect(buildNoticeHref(redirectTo, "success", "Reaction updated."));
 }
 
 export async function toggleRepostAction(formData: FormData) {
@@ -386,7 +399,7 @@ export async function toggleRepostAction(formData: FormData) {
     }
 
     revalidatePath("/");
-    redirect(buildNoticeHref("/", "success", "Repost removed."));
+    redirect(buildNoticeHref(redirectTo, "success", "Repost removed."));
   }
 
   const { error } = await supabase.from("reposts").insert({
@@ -399,7 +412,7 @@ export async function toggleRepostAction(formData: FormData) {
   }
 
   revalidatePath("/");
-  redirect(buildNoticeHref("/", "success", "Reposted to your profile."));
+  redirect(buildNoticeHref(redirectTo, "success", "Reposted to your profile."));
 }
 
 export async function createReportAction(formData: FormData) {

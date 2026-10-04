@@ -63,6 +63,8 @@ All four checks run on every pull request via `.github/workflows/ci.yml`.
 ## Current implemented routes
 
 - `/` — feed, MVP overview, and poll composer
+- `/p/[postId]` — public permalink for one poll post (works signed-out)
+- `/u/[username]` — public profile and that account's polls (works signed-out)
 - `/auth/login` — email/password sign-in plus Google OAuth entrypoint
 - `/auth/sign-up` — account creation
 - `/onboarding` — profile setup

@@ -5,10 +5,13 @@ import {
   demoCurrentUser,
   demoFeedPosts,
   demoNotifications,
+  demoProfiles,
   demoReports,
 } from "@/lib/demo-data";
+import { embeddedRows, firstEmbedded } from "@/lib/embeds";
 import { renderNotification } from "@/lib/notifications";
 import { createClient } from "@/lib/supabase/server";
+import { validateUsername } from "@/lib/username";
 import type {
   AppNotification,
   CurrentUser,
@@ -16,7 +19,47 @@ import type {
   Loaded,
   ModerationReport,
   PollOption,
+  PublicProfilePage,
 } from "@/lib/types";
+
+type ServerClient = Awaited<ReturnType<typeof createClient>>;
+
+/**
+ * `posts.id` is a uuid, and PostgREST turns a non-uuid filter value into a
+ * Postgres cast error rather than an empty result. Without this guard
+ * `/p/not-a-uuid` would render "something broke on our side" instead of a 404.
+ */
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The single post projection, shared by the feed, `/p/[postId]`, and the post
+ * list on `/u/[username]`. `mapFeedPost` depends on the exact embed shape this
+ * select produces, so the three callers must not drift apart.
+ */
+const POST_SELECT = `
+        id,
+        body,
+        image_url,
+        hashtags,
+        created_at,
+        author:profiles!posts_author_id_fkey (
+          user_id,
+          username,
+          display_name,
+          avatar_url,
+          role
+        ),
+        poll:polls (
+          id,
+          question,
+          status,
+          poll_options ( id, label, position ),
+          poll_votes ( option_id )
+        ),
+        reactions ( reaction_type, user_id ),
+        reposts ( user_id )
+      `;
 
 function formatProfile(profile: Record<string, unknown> | null | undefined) {
   return {
@@ -37,25 +80,19 @@ function mapFeedPost(
   viewerId: string | undefined,
   voteCounts: Map<string, number>,
 ): FeedPost | null {
-  const pollRows = Array.isArray(row.poll) ? row.poll : [];
-  const pollRow = pollRows[0] as Record<string, unknown> | undefined;
+  // `polls.post_id` is `not null unique`, so PostgREST proves this embed is
+  // to-one and returns a bare object rather than a one-element array. Branching
+  // on the shape here is what silently dropped every post.
+  const pollRow = firstEmbedded(row.poll);
 
   if (!pollRow) {
     return null;
   }
 
-  const voteRows = Array.isArray(pollRow.poll_votes)
-    ? (pollRow.poll_votes as Array<Record<string, unknown>>)
-    : [];
-  const optionRows = Array.isArray(pollRow.poll_options)
-    ? (pollRow.poll_options as Array<Record<string, unknown>>)
-    : [];
-  const reactionRows = Array.isArray(row.reactions)
-    ? (row.reactions as Array<Record<string, unknown>>)
-    : [];
-  const repostRows = Array.isArray(row.reposts)
-    ? (row.reposts as Array<Record<string, unknown>>)
-    : [];
+  const voteRows = embeddedRows(pollRow.poll_votes);
+  const optionRows = embeddedRows(pollRow.poll_options);
+  const reactionRows = embeddedRows(row.reactions);
+  const repostRows = embeddedRows(row.reposts);
   // RLS restricts poll_votes to the viewer's own rows, so this is their vote
   // and nobody else's. Tallies come from the aggregate view instead.
   const viewerVote = voteRows[0];
@@ -78,7 +115,10 @@ function mapFeedPost(
       ? row.hashtags.map((tag) => String(tag))
       : [],
     createdAt: String(row.created_at ?? new Date().toISOString()),
-    author: formatProfile(row.author as Record<string, unknown>),
+    // `author:profiles!posts_author_id_fkey` is to-one, so this arrives as an
+    // object today. Normalising it anyway means a schema change that flips the
+    // shape degrades to the "New user" fallbacks instead of mis-rendering.
+    author: formatProfile(firstEmbedded(row.author)),
     poll: {
       id: String(pollRow.id),
       question: String(pollRow.question ?? "Untitled poll"),
@@ -105,6 +145,44 @@ function mapFeedPost(
       viewerHasReposted: repostRows.some((repost) => repost.user_id === viewerId),
     },
   };
+}
+
+/**
+ * Tallies for every poll embedded in `rows`, read from the
+ * `poll_option_vote_counts` view (which is `security_invoker = false`, so totals
+ * are public while `poll_votes.voter_id` stays private).
+ *
+ * Returns `null` on a query failure so callers can report an outage instead of
+ * rendering every poll as zero votes.
+ */
+async function loadVoteCounts(
+  supabase: ServerClient,
+  rows: Array<Record<string, unknown>>,
+): Promise<Map<string, number> | null> {
+  const voteCounts = new Map<string, number>();
+  const pollIds = rows
+    .flatMap((row) => embeddedRows(row.poll))
+    .map((poll) => String(poll.id ?? ""))
+    .filter(Boolean);
+
+  if (pollIds.length === 0) {
+    return voteCounts;
+  }
+
+  const { data: countRows, error } = await supabase
+    .from("poll_option_vote_counts")
+    .select("option_id, votes")
+    .in("poll_id", pollIds);
+
+  if (error) {
+    return null;
+  }
+
+  for (const countRow of countRows ?? []) {
+    voteCounts.set(String(countRow.option_id), Number(countRow.votes ?? 0));
+  }
+
+  return voteCounts;
 }
 
 export function isDemoMode() {
@@ -164,31 +242,7 @@ export async function getFeedPosts(): Promise<Loaded<FeedPost[]>> {
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("posts")
-    .select(
-      `
-        id,
-        body,
-        image_url,
-        hashtags,
-        created_at,
-        author:profiles!posts_author_id_fkey (
-          user_id,
-          username,
-          display_name,
-          avatar_url,
-          role
-        ),
-        poll:polls (
-          id,
-          question,
-          status,
-          poll_options ( id, label, position ),
-          poll_votes ( option_id )
-        ),
-        reactions ( reaction_type, user_id ),
-        reposts ( user_id )
-      `,
-    )
+    .select(POST_SELECT)
     .order("created_at", { ascending: false })
     .limit(20);
 
@@ -197,32 +251,158 @@ export async function getFeedPosts(): Promise<Loaded<FeedPost[]>> {
   }
 
   const rows = data as Array<Record<string, unknown>>;
-  const pollIds = rows
-    .flatMap((row) => (Array.isArray(row.poll) ? row.poll : []))
-    .map((poll) => String((poll as Record<string, unknown>).id ?? ""))
-    .filter(Boolean);
+  const voteCounts = await loadVoteCounts(supabase, rows);
 
-  const voteCounts = new Map<string, number>();
-
-  if (pollIds.length > 0) {
-    const { data: countRows, error: countError } = await supabase
-      .from("poll_option_vote_counts")
-      .select("option_id, votes")
-      .in("poll_id", pollIds);
-
-    if (countError) {
-      return { data: [], failed: true };
-    }
-
-    for (const countRow of countRows ?? []) {
-      voteCounts.set(String(countRow.option_id), Number(countRow.votes ?? 0));
-    }
+  if (!voteCounts) {
+    return { data: [], failed: true };
   }
 
   return {
     data: rows
       .map((row) => mapFeedPost(row, currentUser?.id, voteCounts))
       .filter((post): post is FeedPost => Boolean(post)),
+    failed: false,
+  };
+}
+
+/**
+ * One post for the `/p/[postId]` permalink. `data: null` with `failed: false`
+ * means "no such post" (the caller should 404); `failed: true` means the read
+ * itself broke.
+ *
+ * Deliberately not gated on a signed-in viewer: the whole point of a permalink
+ * is that it works for someone who followed a shared link. RLS makes posts,
+ * polls, options, reactions, and reposts publicly readable, and the vote view
+ * is granted to `anon`.
+ */
+export async function getPostById(
+  postId: string,
+): Promise<Loaded<FeedPost | null>> {
+  if (!hasSupabasePublicEnv()) {
+    return {
+      data: demoFeedPosts.find((post) => post.id === postId) ?? null,
+      failed: false,
+    };
+  }
+
+  if (!UUID_PATTERN.test(postId)) {
+    return { data: null, failed: false };
+  }
+
+  const currentUser = await getCurrentUser();
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("posts")
+    .select(POST_SELECT)
+    .eq("id", postId)
+    .maybeSingle();
+
+  if (error) {
+    return { data: null, failed: true };
+  }
+
+  if (!data) {
+    return { data: null, failed: false };
+  }
+
+  const rows = [data as Record<string, unknown>];
+  const voteCounts = await loadVoteCounts(supabase, rows);
+
+  if (!voteCounts) {
+    return { data: null, failed: true };
+  }
+
+  // A post whose poll row is missing cannot be rendered by `PollCard`, and
+  // every post in this product has one, so treat it as absent rather than
+  // crashing the permalink.
+  return {
+    data: mapFeedPost(rows[0], currentUser?.id, voteCounts),
+    failed: false,
+  };
+}
+
+/**
+ * A public profile plus that author's posts, for `/u/[username]`. The lookup
+ * uses the normalised handle, so `/u/@Nyangi_Vic` resolves the same row as
+ * `/u/nyangi_vic`, and a handle that could never exist (wrong characters,
+ * wrong length) short-circuits to "not found" without a query.
+ */
+export async function getProfileByUsername(
+  username: string,
+): Promise<Loaded<PublicProfilePage | null>> {
+  const handle = validateUsername(username);
+
+  if (!handle.ok) {
+    return { data: null, failed: false };
+  }
+
+  if (!hasSupabasePublicEnv()) {
+    const profile = demoProfiles.find(
+      (candidate) => candidate.username === handle.username,
+    );
+
+    if (!profile) {
+      return { data: null, failed: false };
+    }
+
+    return {
+      data: {
+        profile,
+        posts: demoFeedPosts.filter(
+          (post) => post.author.username === handle.username,
+        ),
+      },
+      failed: false,
+    };
+  }
+
+  const currentUser = await getCurrentUser();
+  const supabase = await createClient();
+  const { data: profileRow, error: profileError } = await supabase
+    .from("profiles")
+    .select(
+      "user_id, username, display_name, bio, avatar_url, role, created_at",
+    )
+    .eq("username", handle.username)
+    .maybeSingle();
+
+  if (profileError) {
+    return { data: null, failed: true };
+  }
+
+  if (!profileRow) {
+    return { data: null, failed: false };
+  }
+
+  const { data: postData, error: postError } = await supabase
+    .from("posts")
+    .select(POST_SELECT)
+    .eq("author_id", profileRow.user_id)
+    .order("created_at", { ascending: false })
+    .limit(20);
+
+  if (postError || !postData) {
+    return { data: null, failed: true };
+  }
+
+  const rows = postData as Array<Record<string, unknown>>;
+  const voteCounts = await loadVoteCounts(supabase, rows);
+
+  if (!voteCounts) {
+    return { data: null, failed: true };
+  }
+
+  return {
+    data: {
+      profile: {
+        ...formatProfile(profileRow as Record<string, unknown>),
+        bio: typeof profileRow.bio === "string" ? profileRow.bio : undefined,
+        joinedAt: String(profileRow.created_at ?? new Date().toISOString()),
+      },
+      posts: rows
+        .map((row) => mapFeedPost(row, currentUser?.id, voteCounts))
+        .filter((post): post is FeedPost => Boolean(post)),
+    },
     failed: false,
   };
 }
@@ -312,15 +492,11 @@ export async function getModerationReports(): Promise<Loaded<ModerationReport[]>
   }
 
   const reports: ModerationReport[] = data.map((report) => {
-    const targetPost = Array.isArray(report.target_post)
-      ? report.target_post[0]
-      : report.target_post;
-    const targetUser = Array.isArray(report.target_user)
-      ? report.target_user[0]
-      : report.target_user;
-    const reporter = Array.isArray(report.reporter)
-      ? report.reporter[0]
-      : report.reporter;
+    // These three were already shape-agnostic; routed through the shared
+    // helper so there is one place left in this file that knows about embeds.
+    const targetPost = firstEmbedded(report.target_post);
+    const targetUser = firstEmbedded(report.target_user);
+    const reporter = firstEmbedded(report.reporter);
 
     return {
       id: String(report.id),
