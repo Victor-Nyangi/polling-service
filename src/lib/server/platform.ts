@@ -1,5 +1,12 @@
 import "server-only";
 
+import { cookies } from "next/headers";
+import {
+  BALLOT_MARKER_COOKIE,
+  type BallotMarker,
+  parseBallotMarker,
+  participationModeOf,
+} from "@/lib/anonymous-vote";
 import { hasSupabasePublicEnv } from "@/lib/env";
 import {
   demoCurrentUser,
@@ -54,6 +61,7 @@ const POST_SELECT = `
           id,
           question,
           status,
+          participation_mode,
           poll_options ( id, label, position ),
           poll_votes ( option_id )
         ),
@@ -75,11 +83,35 @@ function formatProfile(profile: Record<string, unknown> | null | undefined) {
   } as const;
 }
 
+/**
+ * What the post mapper needs to know about who is looking. `ballots` is set
+ * only for an anonymous viewer: their `pv_ballots` marker cookie, written by
+ * `voteOnPollAction` after a successful anonymous vote.
+ */
+type Viewer = {
+  id: string | undefined;
+  ballots: BallotMarker | undefined;
+};
+
+async function resolveViewer(currentUser: CurrentUser | null): Promise<Viewer> {
+  if (currentUser) {
+    return { id: currentUser.id, ballots: undefined };
+  }
+
+  const cookieStore = await cookies();
+
+  return {
+    id: undefined,
+    ballots: parseBallotMarker(cookieStore.get(BALLOT_MARKER_COOKIE)?.value),
+  };
+}
+
 function mapFeedPost(
   row: Record<string, unknown>,
-  viewerId: string | undefined,
+  viewer: Viewer,
   voteCounts: Map<string, number>,
 ): FeedPost | null {
+  const viewerId = viewer.id;
   // `polls.post_id` is `not null unique`, so PostgREST proves this embed is
   // to-one and returns a bare object rather than a one-element array. Branching
   // on the shape here is what silently dropped every post.
@@ -106,6 +138,16 @@ function mapFeedPost(
     }))
     .sort((left, right) => left.position - right.position);
   const totalVotes = options.reduce((sum, option) => sum + option.votes, 0);
+  const pollId = String(pollRow.id);
+  // An anonymous viewer has no poll_votes row they can read (RLS keys on
+  // auth.uid()), so their choice comes from the marker cookie instead — and
+  // only if it names an option this poll actually has.
+  const markedOptionId = viewer.ballots?.get(pollId.toLowerCase());
+  const viewerVoteOptionId = viewer.ballots
+    ? options.find((option) => option.id.toLowerCase() === markedOptionId)?.id
+    : typeof viewerVote?.option_id === "string"
+      ? viewerVote.option_id
+      : undefined;
 
   return {
     id: String(row.id),
@@ -120,13 +162,14 @@ function mapFeedPost(
     // shape degrades to the "New user" fallbacks instead of mis-rendering.
     author: formatProfile(firstEmbedded(row.author)),
     poll: {
-      id: String(pollRow.id),
+      id: pollId,
       question: String(pollRow.question ?? "Untitled poll"),
       status: pollRow.status === "closed" ? "closed" : "active",
       options,
       totalVotes,
-      viewerVoteOptionId:
-        typeof viewerVote?.option_id === "string" ? viewerVote.option_id : undefined,
+      viewerVoteOptionId,
+      participationMode: participationModeOf(pollRow.participation_mode),
+      viewerIsAnonymous: viewerId === undefined,
     },
     reactions: {
       likes: reactionRows.filter((reaction) => reaction.reaction_type === "like")
@@ -239,6 +282,7 @@ export async function getFeedPosts(): Promise<Loaded<FeedPost[]>> {
   }
 
   const currentUser = await getCurrentUser();
+  const viewer = await resolveViewer(currentUser);
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("posts")
@@ -259,7 +303,7 @@ export async function getFeedPosts(): Promise<Loaded<FeedPost[]>> {
 
   return {
     data: rows
-      .map((row) => mapFeedPost(row, currentUser?.id, voteCounts))
+      .map((row) => mapFeedPost(row, viewer, voteCounts))
       .filter((post): post is FeedPost => Boolean(post)),
     failed: false,
   };
@@ -290,6 +334,7 @@ export async function getPostById(
   }
 
   const currentUser = await getCurrentUser();
+  const viewer = await resolveViewer(currentUser);
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("posts")
@@ -316,7 +361,7 @@ export async function getPostById(
   // every post in this product has one, so treat it as absent rather than
   // crashing the permalink.
   return {
-    data: mapFeedPost(rows[0], currentUser?.id, voteCounts),
+    data: mapFeedPost(rows[0], viewer, voteCounts),
     failed: false,
   };
 }
@@ -357,6 +402,7 @@ export async function getProfileByUsername(
   }
 
   const currentUser = await getCurrentUser();
+  const viewer = await resolveViewer(currentUser);
   const supabase = await createClient();
   const { data: profileRow, error: profileError } = await supabase
     .from("profiles")
@@ -400,7 +446,7 @@ export async function getProfileByUsername(
         joinedAt: String(profileRow.created_at ?? new Date().toISOString()),
       },
       posts: rows
-        .map((row) => mapFeedPost(row, currentUser?.id, voteCounts))
+        .map((row) => mapFeedPost(row, viewer, voteCounts))
         .filter((post): post is FeedPost => Boolean(post)),
     },
     failed: false,

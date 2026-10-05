@@ -48,7 +48,16 @@ export type FeedPost = {
     status: "active" | "closed";
     options: PollOption[];
     totalVotes: number;
+    /**
+     * The viewer's ballot. For a signed-in viewer it comes from their own
+     * `poll_votes` row; for an anonymous one, from the `pv_ballots` marker
+     * cookie — a display hint, not proof (PV005 is the guarantee).
+     */
     viewerVoteOptionId?: string;
+    /** `polls.participation_mode`. Absent means open, the column default. */
+    participationMode?: "open" | "invite";
+    /** True when nobody is signed in, i.e. a vote would go the anonymous path. */
+    viewerIsAnonymous?: boolean;
   };
   reactions: {
     likes: number;

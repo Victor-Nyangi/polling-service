@@ -1,8 +1,20 @@
 "use server";
 
+import { isAuthSessionMissingError } from "@supabase/supabase-js";
 import { revalidatePath } from "next/cache";
-import { headers } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
+import {
+  ANONYMOUS_COOKIE_MAX_AGE,
+  BALLOT_MARKER_COOKIE,
+  PARTICIPANT_COOKIE,
+  anonymousVoteNotice,
+  deriveParticipantToken,
+  isUuid,
+  mintBrowserToken,
+  parseBrowserToken,
+  recordBallot,
+} from "@/lib/anonymous-vote";
 import { hasSupabasePublicEnv } from "@/lib/env";
 import { buildNoticeHref } from "@/lib/notice";
 import { isPollClosed } from "@/lib/poll-status";
@@ -298,12 +310,95 @@ export async function createPollPostAction(formData: FormData) {
   redirect(buildNoticeHref("/", "success", "Poll post created."));
 }
 
+const anonymousCookieOptions = {
+  httpOnly: true,
+  sameSite: "lax",
+  secure: process.env.NODE_ENV === "production",
+  path: "/",
+  maxAge: ANONYMOUS_COOKIE_MAX_AGE,
+} as const;
+
+/**
+ * A ballot from a visitor with no session, through `cast_anonymous_vote`. The
+ * function is the whole guarantee — token hashing, one ballot per token, the
+ * poll's mode, the close — so this side only supplies the per-poll token and
+ * turns the SQLSTATE it refuses with into a notice.
+ */
+async function voteAnonymously(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  redirectTo: string,
+  pollId: string,
+  optionId: string,
+): Promise<never> {
+  // Non-uuids would reach Postgres as a cast error (22P02); refuse them here
+  // with the same sentence a missing poll gets.
+  if (!isUuid(pollId) || !isUuid(optionId)) {
+    return redirectWithNotice(redirectTo, "error", "That poll is no longer available.");
+  }
+
+  const cookieStore = await cookies();
+  let browserToken = parseBrowserToken(cookieStore.get(PARTICIPANT_COOKIE)?.value);
+
+  // Minted before the call, not after a success, so a refused first vote still
+  // leaves this browser with the identity the database may already know.
+  // Never logged: it is the only thing standing between a browser and its
+  // ballots.
+  if (!browserToken) {
+    browserToken = mintBrowserToken();
+    cookieStore.set(PARTICIPANT_COOKIE, browserToken, anonymousCookieOptions);
+  }
+
+  const { error } = await supabase.rpc("cast_anonymous_vote", {
+    p_poll_id: pollId,
+    p_option_id: optionId,
+    p_token: deriveParticipantToken(browserToken, pollId),
+  });
+
+  if (error) {
+    const notice = anonymousVoteNotice(error.code);
+    return redirectWithNotice(redirectTo, notice.type, notice.message);
+  }
+
+  cookieStore.set(
+    BALLOT_MARKER_COOKIE,
+    recordBallot(cookieStore.get(BALLOT_MARKER_COOKIE)?.value, pollId, optionId),
+    anonymousCookieOptions,
+  );
+
+  revalidatePath("/");
+  redirect(buildNoticeHref(redirectTo, "success", "Vote recorded."));
+}
+
 export async function voteOnPollAction(formData: FormData) {
   const redirectTo = redirectTarget(formData);
   await requireConfigured(redirectTo);
   const pollId = stringValue(formData, "pollId");
   const optionId = stringValue(formData, "optionId");
-  const { supabase, user } = await requireAuthenticatedUser(redirectTo);
+  const supabase = await createClient();
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+
+  // Anonymous only when there is positively no session. Any other auth failure
+  // (Auth unreachable, a rejected token) is someone who may think they are
+  // signed in, and casting an anonymous ballot for them would give one person
+  // two identities on the poll — so they get the signed-in path's refusal.
+  if (!user && (!authError || isAuthSessionMissingError(authError))) {
+    await voteAnonymously(supabase, redirectTo, pollId, optionId);
+  }
+
+  if (authError || !user) {
+    await redirectWithNotice(
+      redirectTo,
+      "error",
+      "Sign in first to complete that action.",
+    );
+  }
+
+  if (!user) {
+    throw new Error("Authenticated user missing after redirect guard.");
+  }
 
   // The `enforce_votes_before_poll_close` trigger on `poll_votes` is what
   // actually stops a vote on a closed poll — it has to be, because the

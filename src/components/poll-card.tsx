@@ -34,6 +34,13 @@ export function PollCard({
   post: FeedPost;
   redirectTo?: string;
 }) {
+  // Anonymous ballots on an invite-mode poll need a pre-issued token, which
+  // this app does not hand out yet, so a signed-out viewer gets the results
+  // without buttons rather than a button that can only answer PV004. Signed-in
+  // voters keep the existing path.
+  const inviteOnly =
+    post.poll.participationMode === "invite" && post.poll.viewerIsAnonymous === true;
+
   return (
     <article className="rounded-3xl border border-border bg-card p-6 shadow-sm">
       <div className="flex items-start justify-between gap-4">
@@ -77,9 +84,33 @@ export function PollCard({
         <h3 className="mt-2 font-display text-lg font-semibold">
           {post.poll.question}
         </h3>
+        {inviteOnly ? (
+          <p className="mt-2 text-sm text-muted">
+            This poll is invite-only, so voting needs an invite link.
+          </p>
+        ) : null}
         <div className="mt-4 grid gap-3">
           {post.poll.options.map((option) => {
             const isSelected = post.poll.viewerVoteOptionId === option.id;
+            const tally = (
+              <div className="flex items-center justify-between gap-4">
+                <span>{option.label}</span>
+                <span className="font-mono text-sm text-muted">
+                  {option.votes} votes · {votePercentage(post, option.votes)}%
+                </span>
+              </div>
+            );
+
+            if (inviteOnly) {
+              return (
+                <div
+                  key={option.id}
+                  className="rounded-2xl border border-border bg-card px-4 py-3"
+                >
+                  {tally}
+                </div>
+              );
+            }
 
             return (
               <form key={option.id} action={voteOnPollAction} className="grid gap-2">
@@ -94,12 +125,7 @@ export function PollCard({
                       : "border-border bg-card hover:border-accent/50"
                   }`}
                 >
-                  <div className="flex items-center justify-between gap-4">
-                    <span>{option.label}</span>
-                    <span className="font-mono text-sm text-muted">
-                      {option.votes} votes · {votePercentage(post, option.votes)}%
-                    </span>
-                  </div>
+                  {tally}
                 </button>
               </form>
             );
