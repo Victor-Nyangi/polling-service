@@ -5,6 +5,7 @@ import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { hasSupabasePublicEnv } from "@/lib/env";
 import { buildNoticeHref } from "@/lib/notice";
+import { isPollClosed } from "@/lib/poll-status";
 import { safeRedirectPath } from "@/lib/redirect";
 import { createClient } from "@/lib/supabase/server";
 import { validateUsername } from "@/lib/username";
@@ -303,6 +304,25 @@ export async function voteOnPollAction(formData: FormData) {
   const pollId = stringValue(formData, "pollId");
   const optionId = stringValue(formData, "optionId");
   const { supabase, user } = await requireAuthenticatedUser(redirectTo);
+
+  // The `enforce_votes_before_poll_close` trigger on `poll_votes` is what
+  // actually stops a vote on a closed poll — it has to be, because the
+  // anonymous vote path will not come through here. This read exists so the
+  // refusal reads as a notice instead of a raw Postgres exception.
+  const { data: poll } = await supabase
+    .from("polls")
+    .select("status, closes_at")
+    .eq("id", pollId)
+    .maybeSingle();
+
+  if (!poll) {
+    await redirectWithNotice(redirectTo, "error", "That poll is no longer available.");
+    throw new Error("Poll missing after redirect guard.");
+  }
+
+  if (isPollClosed({ status: poll.status, closesAt: poll.closes_at })) {
+    await redirectWithNotice(redirectTo, "info", "This poll has closed.");
+  }
 
   const { data: existingVote } = await supabase
     .from("poll_votes")

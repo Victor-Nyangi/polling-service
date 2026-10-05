@@ -35,6 +35,30 @@ create table if not exists public.polls (
   created_at timestamptz not null default now()
 );
 
+-- Audience-response polling needs two ways to let a crowd in. 'open' mints a
+-- participant token the first time someone opens the poll; 'invite' refuses
+-- anyone without a token handed out beforehand (a poll_participants row). Both
+-- modes store the ballot identically, in poll_votes.participant_hash — the mode
+-- decides only whether that row has to pre-exist, which is why there is one
+-- hash column and not two. 'open' is the default so every existing poll keeps
+-- behaving exactly as it does today.
+alter table public.polls
+  add column if not exists participation_mode text not null default 'open';
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'polls_participation_mode_check'
+  ) then
+    alter table public.polls
+      add constraint polls_participation_mode_check
+      check (participation_mode in ('open', 'invite'));
+  end if;
+end
+$$;
+
 create table if not exists public.poll_options (
   id uuid primary key default gen_random_uuid(),
   poll_id uuid not null references public.polls (id) on delete cascade,
@@ -51,6 +75,96 @@ create table if not exists public.poll_votes (
   voter_id uuid not null references public.profiles (user_id) on delete cascade,
   created_at timestamptz not null default now(),
   unique (poll_id, voter_id)
+);
+
+-- One identity per ballot, and exactly one.
+--
+-- The product is repositioning to audience-response polling: the audience votes
+-- without an account and only the people running a poll sign in. That removes
+-- the voter_id this table was built around, so a ballot is now identified
+-- either by a signed-in profile (voter_id) or by an opaque participant token
+-- hash (participant_hash). num_nonnulls is the load-bearing part: without it a
+-- row with neither identity would be an unattributable ballot that no
+-- uniqueness rule can catch, and a row with both would be counted by both.
+--
+-- These are alters rather than edits to the create table above because the live
+-- database already holds the old shape and there is no migration tool — the
+-- file is re-pasted whole. A fresh database converges on the same state.
+alter table public.poll_votes
+  alter column voter_id drop not null;
+
+alter table public.poll_votes
+  add column if not exists participant_hash text;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'poll_votes_one_identity_check'
+  ) then
+    alter table public.poll_votes
+      add constraint poll_votes_one_identity_check
+      check (num_nonnulls(voter_id, participant_hash) = 1);
+  end if;
+end
+$$;
+
+-- `unique (poll_id, voter_id)` above was declared inline, so Postgres generated
+-- its name and that name can differ between databases built at different times.
+-- Look it up by its column set rather than guessing it. It has to go because a
+-- unique constraint cannot be partial, and "one vote per poll" is now two rules
+-- with two different scopes: one over the signed-in voters, one over the
+-- anonymous participants. The two partial unique indexes further down say that;
+-- a single whole-table constraint cannot.
+do $$
+declare
+  legacy_constraint text;
+begin
+  select c.conname into legacy_constraint
+  from pg_constraint as c
+  where c.conrelid = 'public.poll_votes'::regclass
+    and c.contype = 'u'
+    and (
+      -- attname is `name`, not `text`, and `name[] = text[]` is not a
+      -- resolvable operator. Cast the elements, not the array.
+      select array_agg(a.attname::text order by a.attname::text)
+      from unnest(c.conkey) as k (attnum)
+      join pg_attribute as a
+        on a.attrelid = c.conrelid
+       and a.attnum = k.attnum
+    ) = array['poll_id', 'voter_id']::text[]
+  limit 1;
+
+  if legacy_constraint is not null then
+    execute format(
+      'alter table public.poll_votes drop constraint %I',
+      legacy_constraint
+    );
+  end if;
+end
+$$;
+
+-- Pre-issued, one-time invite links for invite-mode polls. The rows exist
+-- before anyone votes: a facilitator mints N of them, each carrying a raw
+-- token, and `label` records which one went where (a staff name, a seat
+-- number). `used_at` is what makes a link one-time rather than shareable.
+--
+-- Only hashes are stored. The raw token travels in the invite link and then
+-- lives in a cookie, which makes it a bearer credential — in invite mode the
+-- token *is* the invitation, so a readable token list is both the guest list and
+-- a working set of ballots. Phase 2 hashes server-side; nothing raw reaches
+-- this table.
+--
+-- The table lands now, ahead of the code that uses it, so the anonymous voting
+-- path does not need a second migration to turn invite mode on.
+create table if not exists public.poll_participants (
+  poll_id uuid not null references public.polls (id) on delete cascade,
+  token_hash text not null,
+  label text,
+  issued_at timestamptz not null default now(),
+  used_at timestamptz,
+  primary key (poll_id, token_hash)
 );
 
 create table if not exists public.reactions (
@@ -107,6 +221,19 @@ create index if not exists polls_post_id_idx
 
 create index if not exists poll_votes_poll_id_idx
   on public.poll_votes (poll_id);
+
+-- Replaces the generated `unique (poll_id, voter_id)` constraint dropped above.
+-- Two rules, two scopes: a signed-in voter votes once per poll, and a
+-- participant token votes once per poll. Each index ignores the rows carrying
+-- the other kind of identity, which is the part a whole-table constraint could
+-- not express.
+create unique index if not exists poll_votes_one_vote_per_voter_idx
+  on public.poll_votes (poll_id, voter_id)
+  where voter_id is not null;
+
+create unique index if not exists poll_votes_one_vote_per_participant_idx
+  on public.poll_votes (poll_id, participant_hash)
+  where participant_hash is not null;
 
 create index if not exists reactions_post_id_idx
   on public.reactions (post_id);
@@ -258,6 +385,58 @@ left join public.profiles p on p.user_id = u.id
 where p.user_id is null
 on conflict do nothing;
 
+-- `polls.closes_at` and `polls.status` were enforced nowhere: no constraint, no
+-- policy, and no check in the action layer, so a closed poll accepted votes
+-- indefinitely. Enforce it at the insert, because poll_votes is about to gain a
+-- second writer — the anonymous vote path — and a rule that lives in one caller
+-- is a rule the next caller forgets. The action layer checks too, but only to
+-- produce a readable message instead of this exception.
+--
+-- security definer so the guarantee does not depend on the caller being able to
+-- read public.polls. Were the polls select policy ever tightened, an invoker
+-- function would see no row and report "does not exist" — it fails closed, but
+-- it lies about why.
+create or replace function public.enforce_poll_accepts_votes()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  poll_status text;
+  poll_closes_at timestamptz;
+begin
+  select p.status, p.closes_at
+    into poll_status, poll_closes_at
+  from public.polls as p
+  where p.id = new.poll_id;
+
+  if poll_status is null then
+    raise exception 'poll % does not exist', new.poll_id
+      using errcode = 'foreign_key_violation';
+  end if;
+
+  if poll_status = 'closed' then
+    raise exception 'poll % is closed and cannot accept votes', new.poll_id
+      using errcode = 'check_violation';
+  end if;
+
+  if poll_closes_at is not null and now() > poll_closes_at then
+    raise exception 'poll % closed at % and cannot accept votes',
+      new.poll_id, poll_closes_at
+      using errcode = 'check_violation';
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists enforce_votes_before_poll_close on public.poll_votes;
+create trigger enforce_votes_before_poll_close
+before insert on public.poll_votes
+for each row
+execute function public.enforce_poll_accepts_votes();
+
 create or replace function public.notify_poll_vote()
 returns trigger
 language plpgsql
@@ -271,6 +450,15 @@ declare
   chosen_label text;
   actor_name text;
 begin
+  -- An anonymous ballot has no actor: no profile to name, and actor_id null
+  -- slips past the notifications_engagement_dedupe_idx because nulls never
+  -- collide, so without this an unauthenticated vote endpoint could flood a
+  -- poll's author. Reached only once phase 2 writes participant_hash rows, but
+  -- it is this file that made voter_id nullable, so the guard belongs here.
+  if new.voter_id is null then
+    return new;
+  end if;
+
   select p.id, p.author_id, pl.question
     into target_post, target_author, poll_question
   from public.polls as pl
@@ -482,6 +670,7 @@ alter table public.posts enable row level security;
 alter table public.polls enable row level security;
 alter table public.poll_options enable row level security;
 alter table public.poll_votes enable row level security;
+alter table public.poll_participants enable row level security;
 alter table public.reactions enable row level security;
 alter table public.reposts enable row level security;
 alter table public.reports enable row level security;
@@ -504,6 +693,7 @@ drop policy if exists "authors can create poll options" on public.poll_options;
 drop policy if exists "votes are public to read" on public.poll_votes;
 drop policy if exists "users can read their own votes" on public.poll_votes;
 drop policy if exists "users can vote once as themselves" on public.poll_votes;
+drop policy if exists "poll owners manage their participants" on public.poll_participants;
 drop policy if exists "reactions are public to read" on public.reactions;
 drop policy if exists "users can react as themselves" on public.reactions;
 drop policy if exists "users can remove their own reactions" on public.reactions;
@@ -631,10 +821,47 @@ create policy "users can read their own votes"
   for select
   using (auth.uid() = voter_id);
 
+-- Still the only INSERT path into poll_votes. With voter_id now nullable,
+-- `auth.uid() = voter_id` evaluates to null for an anonymous row and so denies
+-- it, which is deliberate: the anonymous path arrives as a security definer
+-- function that owns the token check, not as a loosened policy here.
 create policy "users can vote once as themselves"
   on public.poll_votes
   for insert
   with check (auth.uid() = voter_id);
+
+-- The participant list is the invite list, and in invite mode each row's token
+-- hash guards a ballot, so anon must get nothing. RLS with no policy for anon
+-- already denies; the revoke is the defence in depth that survives someone
+-- adding a permissive policy later, and phase 2's security definer function is
+-- unaffected by either. One policy covers every command because the predicate
+-- is the same for all of them: the poll's author owns its invite list and
+-- nobody else touches it.
+create policy "poll owners manage their participants"
+  on public.poll_participants
+  for all
+  to authenticated
+  using (
+    exists (
+      select 1
+      from public.polls
+      join public.posts on posts.id = polls.post_id
+      where polls.id = poll_participants.poll_id
+        and posts.author_id = auth.uid()
+    )
+  )
+  with check (
+    exists (
+      select 1
+      from public.polls
+      join public.posts on posts.id = polls.post_id
+      where polls.id = poll_participants.poll_id
+        and posts.author_id = auth.uid()
+    )
+  );
+
+revoke all on public.poll_participants from anon;
+grant select, insert, update, delete on public.poll_participants to authenticated;
 
 create policy "reactions are public to read"
   on public.reactions
