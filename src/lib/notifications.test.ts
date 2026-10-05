@@ -22,6 +22,43 @@ describe("renderNotification", () => {
     });
   });
 
+  it("renders a response milestone with the count and question", () => {
+    expect(
+      renderNotification("poll_responses", {
+        count: 10,
+        question: "Best language?",
+      }),
+    ).toEqual({
+      title: "New responses to your poll",
+      body: '10 people have responded to "Best language?".',
+    });
+  });
+
+  it("uses the singular for the first response", () => {
+    expect(
+      renderNotification("poll_responses", {
+        count: 1,
+        question: "Best language?",
+      }).body,
+    ).toBe('1 person has responded to "Best language?".');
+  });
+
+  it("falls back to placeholders when milestone payload fields are absent", () => {
+    expect(renderNotification("poll_responses", {}).body).toBe(
+      'People have responded to "your poll".',
+    );
+  });
+
+  // payload->>'count' is the dedupe key in the database, but the payload
+  // itself is still untyped JSON by the time it reaches the renderer.
+  it("drops a count that is not a positive integer", () => {
+    for (const count of ["10", 0, -5, 2.5, Number.NaN, null]) {
+      expect(
+        renderNotification("poll_responses", { count, question: "Q?" }).body,
+      ).toBe('People have responded to "Q?".');
+    }
+  });
+
   it("distinguishes likes from dislikes", () => {
     expect(
       renderNotification("post_reaction", {

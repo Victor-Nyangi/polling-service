@@ -252,6 +252,15 @@ create unique index if not exists notifications_engagement_dedupe_idx
   on public.notifications (recipient_id, actor_id, post_id, type)
   where type in ('poll_vote', 'post_reaction', 'post_repost');
 
+-- Anonymous responses notify at milestones (1, 5, 10, 25, 50, then every
+-- 100th), one row per milestone. The engagement index above cannot dedupe them:
+-- actor_id is null and nulls never collide. Keying on the count instead covers
+-- two concurrent votes that both see the same count, and a count that crosses a
+-- milestone a second time.
+create unique index if not exists notifications_poll_responses_dedupe_idx
+  on public.notifications (recipient_id, post_id, type, ((payload ->> 'count')))
+  where type = 'poll_responses';
+
 -- Aggregate tallies for the feed. security_invoker = false is deliberate: the
 -- view runs as its owner and so bypasses the row-level policy on poll_votes,
 -- exposing totals without ever exposing voter_id. This is what lets results be
@@ -495,6 +504,71 @@ create trigger notify_on_poll_vote
 after insert on public.poll_votes
 for each row
 execute function public.notify_poll_vote();
+
+-- The anonymous counterpart to notify_poll_vote(): no actor to name and too
+-- many ballots to notify one by one, so the author hears at milestones instead.
+-- The first matters most — for a feedback round the owner shares a link and
+-- walks away, and response 1 is what proves the link works.
+--
+-- Counted, not tracked: the after-insert row is visible to the count, so the
+-- count is this ballot's position. Two concurrent ballots can both see the same
+-- count; notifications_poll_responses_dedupe_idx turns the second insert into a
+-- no-op, at the cost that a milestone between them can be skipped.
+create or replace function public.notify_poll_responses()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  target_post uuid;
+  target_author uuid;
+  poll_question text;
+  response_count bigint;
+begin
+  if new.participant_hash is null then
+    return new;
+  end if;
+
+  select count(*) into response_count
+  from public.poll_votes as pv
+  where pv.poll_id = new.poll_id
+    and pv.participant_hash is not null;
+
+  if not (
+    response_count in (1, 5, 10, 25, 50)
+    or (response_count >= 100 and response_count % 100 = 0)
+  ) then
+    return new;
+  end if;
+
+  select p.id, p.author_id, pl.question
+    into target_post, target_author, poll_question
+  from public.polls as pl
+  join public.posts as p on p.id = pl.post_id
+  where pl.id = new.poll_id;
+
+  if target_author is null then
+    return new;
+  end if;
+
+  insert into public.notifications (recipient_id, actor_id, post_id, type, payload)
+  values (
+    target_author, null, target_post, 'poll_responses',
+    jsonb_build_object('count', response_count, 'question', poll_question)
+  )
+  on conflict do nothing;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists notify_on_poll_responses on public.poll_votes;
+create trigger notify_on_poll_responses
+after insert on public.poll_votes
+for each row
+when (new.participant_hash is not null)
+execute function public.notify_poll_responses();
 
 create or replace function public.notify_post_reaction()
 returns trigger
@@ -862,6 +936,130 @@ create policy "poll owners manage their participants"
 
 revoke all on public.poll_participants from anon;
 grant select, insert, update, delete on public.poll_participants to authenticated;
+
+-- The anonymous vote path, and the only way a participant_hash ballot gets in.
+-- It has to be security definer: deciding whether a token may vote means
+-- reading poll_participants, which anon must never read (it is the invite
+-- list). The caller hands over the raw token from its cookie or invite link;
+-- only the sha256 of it is compared or stored.
+--
+-- Hashed with the built-in sha256() (core since Postgres 11, in pg_catalog,
+-- which search_path = '' still searches) rather than pgcrypto's digest(). The
+-- `create extension` at the top of this file is a no-op on Supabase, where
+-- pgcrypto already lives in the `extensions` schema, so digest() would need
+-- schema-qualifying and would break on any database that installed it
+-- elsewhere. sha256() has neither problem.
+--
+-- Modes, per polls.participation_mode:
+--   open   — the first ballot registers the token: the participant row is
+--            created here, so a row exists for every anonymous ballot.
+--   invite — the row must have been issued beforehand and not yet used.
+-- Either way used_at is stamped, and a repeat is refused rather than changing
+-- the ballot, matching voteOnPollAction (votes are immutable once submitted).
+--
+-- Every refusal carries its own SQLSTATE so the Server Action can map it to a
+-- notice without parsing messages:
+--   PV001  token missing or too short
+--   PV002  poll does not exist
+--   PV003  option does not belong to the poll
+--   PV004  invite mode, and the token was never issued for this poll
+--   PV005  this token has already voted on this poll
+--   23514  check_violation — the poll is closed. Raised by the
+--          enforce_votes_before_poll_close trigger, not here; this function
+--          builds the row itself with exactly one identity, so the trigger is
+--          the only check_violation it can reach.
+-- The 32-character floor is 128 bits as hex, below the 43 characters of a
+-- base64url-encoded 32-byte token. It refuses guessable values, it does not
+-- define the format.
+--
+-- Atomic: a refusal at the insert rolls back the participant row created for
+-- it, so a closed open-mode poll does not collect registrations.
+create or replace function public.cast_anonymous_vote(
+  p_poll_id uuid,
+  p_option_id uuid,
+  p_token text
+)
+returns void
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  token_digest text;
+  poll_mode text;
+  participant_used_at timestamptz;
+begin
+  if p_token is null or length(p_token) < 32 then
+    raise exception 'participant token is missing or too short'
+      using errcode = 'PV001';
+  end if;
+
+  select pl.participation_mode into poll_mode
+  from public.polls as pl
+  where pl.id = p_poll_id;
+
+  if poll_mode is null then
+    raise exception 'poll % does not exist', p_poll_id
+      using errcode = 'PV002';
+  end if;
+
+  if not exists (
+    select 1
+    from public.poll_options as po
+    where po.id = p_option_id
+      and po.poll_id = p_poll_id
+  ) then
+    raise exception 'option % does not belong to poll %', p_option_id, p_poll_id
+      using errcode = 'PV003';
+  end if;
+
+  token_digest := encode(sha256(convert_to(p_token, 'UTF8')), 'hex');
+
+  if poll_mode = 'open' then
+    insert into public.poll_participants (poll_id, token_hash)
+    values (p_poll_id, token_digest)
+    on conflict (poll_id, token_hash) do nothing;
+  end if;
+
+  -- for update: two requests carrying the same invite token serialize here
+  -- instead of racing to the unique index.
+  select pp.used_at into participant_used_at
+  from public.poll_participants as pp
+  where pp.poll_id = p_poll_id
+    and pp.token_hash = token_digest
+  for update;
+
+  if not found then
+    raise exception 'this token was not invited to poll %', p_poll_id
+      using errcode = 'PV004';
+  end if;
+
+  if participant_used_at is not null then
+    raise exception 'this token has already voted on poll %', p_poll_id
+      using errcode = 'PV005';
+  end if;
+
+  begin
+    insert into public.poll_votes (poll_id, option_id, participant_hash)
+    values (p_poll_id, p_option_id, token_digest);
+  exception
+    -- A ballot without a used_at stamp: written before this function
+    -- existed, or by hand. The unique index still holds the line.
+    when unique_violation then
+      raise exception 'this token has already voted on poll %', p_poll_id
+        using errcode = 'PV005';
+  end;
+
+  update public.poll_participants
+     set used_at = now()
+   where poll_id = p_poll_id
+     and token_hash = token_digest;
+end;
+$$;
+
+revoke all on function public.cast_anonymous_vote(uuid, uuid, text) from public;
+grant execute on function public.cast_anonymous_vote(uuid, uuid, text)
+  to anon, authenticated;
 
 create policy "reactions are public to read"
   on public.reactions

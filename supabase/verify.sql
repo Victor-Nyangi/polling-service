@@ -206,6 +206,53 @@ begin
     raise exception 'poll_votes must not be publicly readable';
   end if;
 
+  ----------------------------------------------------------------------------
+  -- Anonymous ballots: cast_anonymous_vote and response milestones
+  ----------------------------------------------------------------------------
+  perform public.cast_anonymous_vote(v_poll, v_option_a, repeat('a', 32));
+
+  if not exists (
+    select 1 from public.poll_participants
+    where poll_id = v_poll
+      and token_hash = encode(sha256(convert_to(repeat('a', 32), 'UTF8')), 'hex')
+      and used_at is not null
+  ) then
+    raise exception 'expected an open-mode vote to register a used participant';
+  end if;
+
+  begin
+    perform public.cast_anonymous_vote(v_poll, v_option_b, repeat('a', 32));
+    raise exception 'expected a repeat anonymous vote to be refused';
+  exception when sqlstate 'PV005' then null;
+  end;
+
+  -- The first anonymous response notifies; the second is not a milestone.
+  perform public.cast_anonymous_vote(v_poll, v_option_b, repeat('b', 32));
+
+  select count(*) into v_count from public.notifications
+  where recipient_id = v_author and type = 'poll_responses' and post_id = v_post;
+  if v_count <> 1 then
+    raise exception 'expected 1 poll_responses notification after 2 responses, got %', v_count;
+  end if;
+
+  update public.polls set participation_mode = 'invite' where id = v_poll;
+  begin
+    perform public.cast_anonymous_vote(v_poll, v_option_a, repeat('c', 32));
+    raise exception 'expected an uninvited token to be refused';
+  exception when sqlstate 'PV004' then null;
+  end;
+
+  -- An issued, unused invite, so the only thing left to refuse it is the close.
+  insert into public.poll_participants (poll_id, token_hash)
+  values (v_poll, encode(sha256(convert_to(repeat('d', 32), 'UTF8')), 'hex'));
+
+  update public.polls set status = 'closed' where id = v_poll;
+  begin
+    perform public.cast_anonymous_vote(v_poll, v_option_a, repeat('d', 32));
+    raise exception 'expected a closed poll to refuse an anonymous vote';
+  exception when check_violation then null;
+  end;
+
   raise notice 'verify.sql: all assertions passed';
 end
 $$;
