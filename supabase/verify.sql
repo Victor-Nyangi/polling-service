@@ -9,6 +9,12 @@ declare
   v_author uuid := '11111111-1111-1111-1111-111111111111';
   v_voter  uuid := '22222222-2222-2222-2222-222222222222';
   v_count  integer;
+  v_tokens text[];
+  v_labels text[];
+  v_invite_post uuid;
+  v_invite_poll uuid;
+  v_invite_a uuid;
+  v_invite_b uuid;
   v_username text;
   v_post uuid;
   v_poll uuid;
@@ -235,23 +241,302 @@ begin
     raise exception 'expected 1 poll_responses notification after 2 responses, got %', v_count;
   end if;
 
-  update public.polls set participation_mode = 'invite' where id = v_poll;
+  ----------------------------------------------------------------------------
+  -- Participation mode is frozen once a poll has a ballot, even for a
+  -- privileged role
+  ----------------------------------------------------------------------------
   begin
-    perform public.cast_anonymous_vote(v_poll, v_option_a, repeat('c', 32));
+    update public.polls set participation_mode = 'invite' where id = v_poll;
+    raise exception 'expected the mode of a poll with votes to be frozen';
+  exception when sqlstate 'PV007' then null;
+  end;
+
+  ----------------------------------------------------------------------------
+  -- Invite mode: privileges
+  ----------------------------------------------------------------------------
+  if has_function_privilege('anon', 'public.issue_poll_invites(uuid, text[])', 'execute')
+     or not has_function_privilege('authenticated', 'public.issue_poll_invites(uuid, text[])', 'execute') then
+    raise exception 'issue_poll_invites must be executable by authenticated only';
+  end if;
+
+  if has_table_privilege('authenticated', 'public.poll_participants', 'insert')
+     or has_column_privilege('authenticated', 'public.poll_participants', 'used_at', 'update')
+     or has_column_privilege('authenticated', 'public.poll_participants', 'token_hash', 'update')
+     or has_table_privilege('anon', 'public.poll_participants', 'select') then
+    raise exception 'poll_participants: insert is issue_poll_invites only, used_at is not the owner''s, anon gets nothing';
+  end if;
+
+  if has_column_privilege('authenticated', 'public.poll_votes', 'participant_hash', 'select')
+     or has_column_privilege('anon', 'public.poll_votes', 'participant_hash', 'select')
+     or has_column_privilege('authenticated', 'public.poll_votes', 'created_at', 'select') then
+    raise exception 'poll_votes.participant_hash and created_at must not be readable';
+  end if;
+
+  if has_column_privilege('authenticated', 'public.polls', 'question', 'update')
+     or has_column_privilege('authenticated', 'public.polls', 'status', 'update')
+     or not has_column_privilege('authenticated', 'public.polls', 'participation_mode', 'update') then
+    raise exception 'authenticated should hold UPDATE on polls.participation_mode only';
+  end if;
+
+  ----------------------------------------------------------------------------
+  -- Invite mode: end to end, as the owner, another user and anon
+  ----------------------------------------------------------------------------
+  -- Created open with no ballots, so the owner's switch to invite is allowed.
+  insert into public.posts (author_id, body)
+  values (v_author, 'verify invite post')
+  returning id into v_invite_post;
+
+  insert into public.polls (post_id, question)
+  values (v_invite_post, 'Verify invite question?')
+  returning id into v_invite_poll;
+
+  insert into public.poll_options (poll_id, label, position)
+  values (v_invite_poll, 'Invite A', 1) returning id into v_invite_a;
+
+  insert into public.poll_options (poll_id, label, position)
+  values (v_invite_poll, 'Invite B', 2) returning id into v_invite_b;
+
+  -- Both claim forms: hosted auth.uid() reads request.jwt.claims, older images
+  -- read request.jwt.claim.sub.
+  perform set_config('request.jwt.claim.sub', v_voter::text, true),
+          set_config('request.jwt.claims', json_build_object('sub', v_voter, 'role', 'authenticated')::text, true),
+          set_config('role', 'authenticated', true);
+
+  update public.polls set participation_mode = 'invite' where id = v_invite_poll;
+  get diagnostics v_count = row_count;
+  if v_count <> 0 then
+    raise exception 'another user must not change a poll''s mode';
+  end if;
+
+  perform set_config('request.jwt.claim.sub', v_author::text, true),
+          set_config('request.jwt.claims', json_build_object('sub', v_author, 'role', 'authenticated')::text, true);
+
+  begin
+    perform public.issue_poll_invites(v_invite_poll, array['too early']);
+    raise exception 'expected issuing on an open poll to be refused';
+  exception when sqlstate 'PV009' then null;
+  end;
+
+  update public.polls set participation_mode = 'invite' where id = v_invite_poll;
+  get diagnostics v_count = row_count;
+  if v_count <> 1 then
+    raise exception 'the owner should be able to change the mode of a poll with no votes';
+  end if;
+
+  select array_agg(i.token order by i.n), array_agg(i.label order by i.n)
+    into v_tokens, v_labels
+  from public.issue_poll_invites(v_invite_poll, array['Alice', null, '   '])
+    with ordinality as i (token, label, n);
+
+  if cardinality(v_tokens) <> 3
+     or v_labels is distinct from array['Alice', null, null]::text[] then
+    raise exception 'expected 3 invites labelled Alice, unnamed, unnamed; got %', v_labels;
+  end if;
+
+  if exists (select 1 from unnest(v_tokens) as t where t !~ '^[A-Za-z0-9_-]{64}$')
+     or (select count(distinct t) from unnest(v_tokens) as t) <> 3 then
+    raise exception 'expected 3 distinct 64-character base64url tokens';
+  end if;
+
+  -- The owner reads the stored rows: hashes only, matching cast_anonymous_vote.
+  select count(*) into v_count
+  from public.poll_participants as pp
+  join unnest(v_tokens) as t
+    on pp.token_hash = encode(sha256(convert_to(t, 'UTF8')), 'hex')
+  where pp.poll_id = v_invite_poll
+    and pp.used_at is null;
+  if v_count <> 3 then
+    raise exception 'expected 3 unused rows storing the sha256 of each token, got %', v_count;
+  end if;
+
+  if exists (
+    select 1 from public.poll_participants as pp
+    where pp.poll_id = v_invite_poll
+      and (pp.token_hash = any (v_tokens) or pp.label = any (v_tokens))
+  ) then
+    raise exception 'a raw invite token must never be stored';
+  end if;
+
+  begin
+    perform public.issue_poll_invites(v_invite_poll, array_fill('x'::text, array[201]));
+    raise exception 'expected a batch of 201 to be refused';
+  exception when sqlstate 'PV010' then null;
+  end;
+
+  begin
+    perform public.issue_poll_invites(v_invite_poll, array[]::text[]);
+    raise exception 'expected an empty batch to be refused';
+  exception when sqlstate 'PV010' then null;
+  end;
+
+  begin
+    perform public.issue_poll_invites(gen_random_uuid(), array['nobody']);
+    raise exception 'expected issuing on a missing poll to be refused';
+  exception when sqlstate 'PV002' then null;
+  end;
+
+  begin
+    insert into public.poll_participants (poll_id, token_hash)
+    values (v_invite_poll, repeat('0', 64));
+    raise exception 'the owner must not insert invites directly';
+  exception when insufficient_privilege then null;
+  end;
+
+  -- Another signed-in user: no invites, no list.
+  perform set_config('request.jwt.claim.sub', v_voter::text, true),
+          set_config('request.jwt.claims', json_build_object('sub', v_voter, 'role', 'authenticated')::text, true);
+
+  begin
+    perform public.issue_poll_invites(v_invite_poll, array['intruder']);
+    raise exception 'expected a non-owner to be refused';
+  exception when sqlstate 'PV008' then null;
+  end;
+
+  if exists (select 1 from public.poll_participants where poll_id = v_invite_poll) then
+    raise exception 'another user must not read the invite list';
+  end if;
+
+  -- A signed-in ballot on an invite poll is refused by the trigger, which runs
+  -- before the RLS check this row would otherwise pass.
+  begin
+    insert into public.poll_votes (poll_id, option_id, voter_id)
+    values (v_invite_poll, v_invite_a, v_voter);
+    raise exception 'expected a signed-in vote on an invite poll to be refused';
+  exception when sqlstate 'PV006' then null;
+  end;
+
+  -- Anon: votes with an invite, and nothing else.
+  perform set_config('request.jwt.claim.sub', '', true),
+          set_config('request.jwt.claims', json_build_object('role', 'anon')::text, true),
+          set_config('role', 'anon', true);
+
+  begin
+    perform public.issue_poll_invites(v_invite_poll, array['anon']);
+    raise exception 'expected anon to be refused issue_poll_invites';
+  exception when insufficient_privilege then null;
+  end;
+
+  begin
+    perform 1 from public.poll_participants;
+    raise exception 'expected anon to be refused the invite list';
+  exception when insufficient_privilege then null;
+  end;
+
+  perform public.cast_anonymous_vote(v_invite_poll, v_invite_b, v_tokens[1]);
+
+  begin
+    perform public.cast_anonymous_vote(v_invite_poll, v_invite_a, v_tokens[1]);
+    raise exception 'expected a used invite to be refused';
+  exception when sqlstate 'PV005' then null;
+  end;
+
+  begin
+    perform public.cast_anonymous_vote(v_invite_poll, v_invite_a, repeat('c', 64));
     raise exception 'expected an uninvited token to be refused';
   exception when sqlstate 'PV004' then null;
   end;
 
-  -- An issued, unused invite, so the only thing left to refuse it is the close.
-  insert into public.poll_participants (poll_id, token_hash)
-  values (v_poll, encode(sha256(convert_to(repeat('d', 32), 'UTF8')), 'hex'));
+  -- Back to the owner: turnout yes, choices no.
+  perform set_config('request.jwt.claim.sub', v_author::text, true),
+          set_config('request.jwt.claims', json_build_object('sub', v_author, 'role', 'authenticated')::text, true),
+          set_config('role', 'authenticated', true);
 
-  update public.polls set status = 'closed' where id = v_poll;
   begin
-    perform public.cast_anonymous_vote(v_poll, v_option_a, repeat('d', 32));
+    update public.polls set participation_mode = 'open' where id = v_invite_poll;
+    raise exception 'expected the owner''s mode change to be refused once a vote exists';
+  exception when sqlstate 'PV007' then null;
+  end;
+
+  select count(*) into v_count
+  from public.poll_participants
+  where poll_id = v_invite_poll and used_at is not null;
+  if v_count <> 1
+     or (select count(*) from public.poll_participants where poll_id = v_invite_poll) <> 3 then
+    raise exception 'the owner should see 3 invites and exactly 1 used, got % used', v_count;
+  end if;
+
+  select coalesce(sum(votes), 0) into v_count
+  from public.poll_option_vote_counts
+  where poll_id = v_invite_poll;
+  if v_count <> 1 then
+    raise exception 'the owner should see a tally of 1, got %', v_count;
+  end if;
+
+  select count(*) into v_count from public.poll_votes where poll_id = v_invite_poll;
+  if v_count <> 0 then
+    raise exception 'the owner must not see anonymous ballot rows, saw %', v_count;
+  end if;
+
+  begin
+    perform pv.participant_hash from public.poll_votes as pv;
+    raise exception 'the owner must not be able to read participant_hash';
+  exception when insufficient_privilege then null;
+  end;
+
+  begin
+    update public.poll_participants set used_at = null where poll_id = v_invite_poll;
+    raise exception 'the owner must not rewrite used_at';
+  exception when insufficient_privilege then null;
+  end;
+
+  update public.poll_participants
+     set label = 'Bob'
+   where poll_id = v_invite_poll
+     and token_hash = encode(sha256(convert_to(v_tokens[2], 'UTF8')), 'hex');
+  get diagnostics v_count = row_count;
+  if v_count <> 1 then
+    raise exception 'the owner should be able to relabel an invite';
+  end if;
+
+  -- Revocation: an unused invite goes, and stops working; a used one stays.
+  delete from public.poll_participants
+   where poll_id = v_invite_poll
+     and token_hash = encode(sha256(convert_to(v_tokens[2], 'UTF8')), 'hex');
+  get diagnostics v_count = row_count;
+  if v_count <> 1 then
+    raise exception 'the owner should be able to revoke an unused invite';
+  end if;
+
+  begin
+    delete from public.poll_participants
+     where poll_id = v_invite_poll
+       and token_hash = encode(sha256(convert_to(v_tokens[1], 'UTF8')), 'hex');
+    raise exception 'expected a used invite to be undeletable';
+  exception when sqlstate 'PV011' then null;
+  end;
+
+  begin
+    perform public.cast_anonymous_vote(v_invite_poll, v_invite_a, v_tokens[2]);
+    raise exception 'expected a revoked invite to be refused';
+  exception when sqlstate 'PV004' then null;
+  end;
+
+  perform set_config('role', 'none', true);
+
+  -- The PV006 refusal is the trigger's, not the policy's: a privileged role,
+  -- which bypasses RLS, is refused too.
+  begin
+    insert into public.poll_votes (poll_id, option_id, voter_id)
+    values (v_invite_poll, v_invite_a, v_voter);
+    raise exception 'expected a privileged signed-in vote on an invite poll to be refused';
+  exception when sqlstate 'PV006' then null;
+  end;
+
+  -- An issued, unused invite, so the only thing left to refuse it is the close.
+  update public.polls set status = 'closed' where id = v_invite_poll;
+  begin
+    perform public.cast_anonymous_vote(v_invite_poll, v_invite_a, v_tokens[3]);
     raise exception 'expected a closed poll to refuse an anonymous vote';
   exception when check_violation then null;
   end;
+
+  -- The owner deleting the post still cascades through a used invite.
+  perform set_config('role', 'authenticated', true);
+  delete from public.posts where id = v_invite_post;
+  perform set_config('role', 'none', true);
+  if exists (select 1 from public.poll_participants where poll_id = v_invite_poll) then
+    raise exception 'deleting the poll should cascade to its invites, used or not';
+  end if;
 
   raise notice 'verify.sql: all assertions passed';
 end

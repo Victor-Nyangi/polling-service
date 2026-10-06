@@ -405,6 +405,21 @@ on conflict do nothing;
 -- read public.polls. Were the polls select policy ever tightened, an invoker
 -- function would see no row and report "does not exist" — it fails closed, but
 -- it lies about why.
+--
+-- It also holds invite mode shut against the signed-in path. An invite-only
+-- poll counts only ballots cast with an issued invite, so a voter_id ballot is
+-- refused with PV006 whoever sends it: the existing Server Action, a direct
+-- PostgREST insert, anything. A signed-in person with an invite votes through
+-- the invite link, which arrives as cast_anonymous_vote and so carries
+-- participant_hash, never voter_id. Checked before the close because it is the
+-- more fundamental refusal: on an invite poll this path is never valid.
+--
+-- `for share` makes the mode read and the ballot one decision. Without it, a
+-- mode change committing between this read and the insert would let a ballot
+-- in under the mode it was just switched away from, and the freeze trigger on
+-- polls below would count no vote yet. A share lock blocks that update until
+-- this ballot commits, then the freeze sees the ballot and refuses. Share locks
+-- do not conflict with each other, so concurrent voters do not queue.
 create or replace function public.enforce_poll_accepts_votes()
 returns trigger
 language plpgsql
@@ -414,15 +429,23 @@ as $$
 declare
   poll_status text;
   poll_closes_at timestamptz;
+  poll_mode text;
 begin
-  select p.status, p.closes_at
-    into poll_status, poll_closes_at
+  select p.status, p.closes_at, p.participation_mode
+    into poll_status, poll_closes_at, poll_mode
   from public.polls as p
-  where p.id = new.poll_id;
+  where p.id = new.poll_id
+  for share;
 
   if poll_status is null then
     raise exception 'poll % does not exist', new.poll_id
       using errcode = 'foreign_key_violation';
+  end if;
+
+  if poll_mode = 'invite' and new.voter_id is not null then
+    raise exception 'poll % is invite-only and accepts invite ballots only',
+      new.poll_id
+      using errcode = 'PV006';
   end if;
 
   if poll_status = 'closed' then
@@ -445,6 +468,49 @@ create trigger enforce_votes_before_poll_close
 before insert on public.poll_votes
 for each row
 execute function public.enforce_poll_accepts_votes();
+
+-- A poll's mode is fixed once it has a ballot. Switching open -> invite after
+-- votes arrive would leave self-registered ballots counted in a poll that
+-- claims every ballot was invited; invite -> open would quietly drop the
+-- guarantee the existing ballots were cast under. Either way the result stops
+-- meaning what its mode says. With no ballots yet, the owner may still change
+-- it (see "authors can update their poll's participation mode").
+--
+-- security definer is load-bearing, not a convenience: poll_votes RLS shows a
+-- caller only their own signed-in ballot, so an invoker function run by the
+-- owner would count zero anonymous ballots and allow the switch on exactly the
+-- polls this exists to freeze. The before-update row lock waits out any ballot
+-- holding the share lock taken by enforce_poll_accepts_votes(), so the count
+-- below includes a ballot that was mid-insert when the update arrived.
+--
+-- Refuses with PV007.
+create or replace function public.enforce_participation_mode_frozen()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if exists (
+    select 1
+    from public.poll_votes as pv
+    where pv.poll_id = new.id
+  ) then
+    raise exception 'poll % already has votes, so its participation mode is fixed',
+      new.id
+      using errcode = 'PV007';
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists freeze_participation_mode_once_voted on public.polls;
+create trigger freeze_participation_mode_once_voted
+before update of participation_mode on public.polls
+for each row
+when (old.participation_mode is distinct from new.participation_mode)
+execute function public.enforce_participation_mode_frozen();
 
 create or replace function public.notify_poll_vote()
 returns trigger
@@ -762,6 +828,7 @@ drop policy if exists "users can update their own posts" on public.posts;
 drop policy if exists "users can delete their own posts" on public.posts;
 drop policy if exists "polls are public to read" on public.polls;
 drop policy if exists "authors can create polls for their posts" on public.polls;
+drop policy if exists "authors can update their poll's participation mode" on public.polls;
 drop policy if exists "poll options are public to read" on public.poll_options;
 drop policy if exists "authors can create poll options" on public.poll_options;
 drop policy if exists "votes are public to read" on public.poll_votes;
@@ -870,6 +937,41 @@ create policy "authors can create polls for their posts"
     )
   );
 
+-- Until this policy polls had no UPDATE policy at all, so nobody but a
+-- privileged role could change a poll after creating it. The mode can be chosen
+-- at insert; this lets the owner correct it afterwards, which matters because
+-- issue_poll_invites() refuses an open poll. freeze_participation_mode_once_voted
+-- stops it the moment a ballot exists.
+--
+-- The policy is row-level and Supabase's table-wide UPDATE grant covers every
+-- column, so on its own it would also let an owner rewrite the question under
+-- votes already cast, reopen a closed poll, or move it to another post. Revoke
+-- the table-wide grant and hand back the one column this policy is for. A
+-- later feature that lets owners close a poll widens the grant deliberately.
+create policy "authors can update their poll's participation mode"
+  on public.polls
+  for update
+  to authenticated
+  using (
+    exists (
+      select 1
+      from public.posts
+      where posts.id = post_id
+        and posts.author_id = auth.uid()
+    )
+  )
+  with check (
+    exists (
+      select 1
+      from public.posts
+      where posts.id = post_id
+        and posts.author_id = auth.uid()
+    )
+  );
+
+revoke update on public.polls from anon, authenticated;
+grant update (participation_mode) on public.polls to authenticated;
+
 create policy "poll options are public to read"
   on public.poll_options
   for select
@@ -904,6 +1006,23 @@ create policy "users can vote once as themselves"
   for insert
   with check (auth.uid() = voter_id);
 
+-- The secret ballot in invite mode. A poll's owner can read its
+-- poll_participants rows — labels (often names), and used_at — because turnout
+-- is theirs to see. participant_hash on a ballot is the same sha256 as that
+-- invite's token_hash, so an owner who could read both could join a name to a
+-- choice. "users can read their own votes" already shows nobody an anonymous
+-- ballot (voter_id is null, so its predicate is null); withholding the columns
+-- as well means a future policy that lets owners read ballots — an export, a
+-- moderation view — exposes choices without the means to name them.
+-- created_at goes too: cast_anonymous_vote() stamps used_at in the ballot's
+-- own transaction, so the two timestamps are equal and would join just as well
+-- as the hashes. option_id stays because the feed needs a signed-in viewer's
+-- own choice. Tallies come from poll_option_vote_counts, which runs as its
+-- owner and is unaffected.
+revoke select on public.poll_votes from anon, authenticated;
+grant select (id, poll_id, option_id, voter_id)
+  on public.poll_votes to anon, authenticated;
+
 -- The participant list is the invite list, and in invite mode each row's token
 -- hash guards a ballot, so anon must get nothing. RLS with no policy for anon
 -- already denies; the revoke is the defence in depth that survives someone
@@ -934,8 +1053,55 @@ create policy "poll owners manage their participants"
     )
   );
 
-revoke all on public.poll_participants from anon;
-grant select, insert, update, delete on public.poll_participants to authenticated;
+-- The owner reads the list and may revoke or relabel an invite, nothing more.
+-- Insert is issue_poll_invites() only, so every invite carries a token the
+-- database generated, never one a client chose. used_at is not the owner's to
+-- write: clearing it would re-arm a spent invite's row, setting it would fake
+-- turnout, and a cleared row could then be deleted past the guard below.
+--
+-- token_hash stays readable, deliberately. It is the row key a revocation has
+-- to name, and hiding it would protect nothing: the owner was handed every raw
+-- token at issue and can sha256 them at will. What keeps a name from meeting a
+-- choice is that poll_votes.participant_hash is unreadable, not this column.
+revoke all on public.poll_participants from anon, authenticated;
+grant select, delete on public.poll_participants to authenticated;
+grant update (label) on public.poll_participants to authenticated;
+
+-- Revoking an invite deletes its row, and is only possible while it is unused.
+-- A used row stands for a ballot already in the tally; deleting it would make
+-- turnout undercount the votes. Refuses with PV011. The poll itself going away
+-- still cascades: by the time the cascade deletes these rows the poll is gone,
+-- which is how this tells a revocation from a deletion of the whole poll.
+create or replace function public.prevent_used_invite_deletion()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if old.used_at is null then
+    return old;
+  end if;
+
+  if not exists (
+    select 1
+    from public.polls as pl
+    where pl.id = old.poll_id
+  ) then
+    return old;
+  end if;
+
+  raise exception 'this invite has been used on poll % and cannot be revoked',
+    old.poll_id
+    using errcode = 'PV011';
+end;
+$$;
+
+drop trigger if exists keep_used_invites on public.poll_participants;
+create trigger keep_used_invites
+before delete on public.poll_participants
+for each row
+execute function public.prevent_used_invite_deletion();
 
 -- The anonymous vote path, and the only way a participant_hash ballot gets in.
 -- It has to be security definer: deciding whether a token may vote means
@@ -968,6 +1134,8 @@ grant select, insert, update, delete on public.poll_participants to authenticate
 --          enforce_votes_before_poll_close trigger, not here; this function
 --          builds the row itself with exactly one identity, so the trigger is
 --          the only check_violation it can reach.
+-- PV006 (a signed-in ballot on an invite poll) is raised by that same trigger
+-- but cannot reach this function: the row it builds never carries voter_id.
 -- The 32-character floor is 128 bits as hex, below the 43 characters of a
 -- base64url-encoded 32-byte token. It refuses guessable values, it does not
 -- define the format.
@@ -994,9 +1162,12 @@ begin
       using errcode = 'PV001';
   end if;
 
+  -- for share, for the reason given at enforce_poll_accepts_votes(): the mode
+  -- this function acts on must still be the mode when the ballot lands.
   select pl.participation_mode into poll_mode
   from public.polls as pl
-  where pl.id = p_poll_id;
+  where pl.id = p_poll_id
+  for share;
 
   if poll_mode is null then
     raise exception 'poll % does not exist', p_poll_id
@@ -1060,6 +1231,102 @@ $$;
 revoke all on function public.cast_anonymous_vote(uuid, uuid, text) from public;
 grant execute on function public.cast_anonymous_vote(uuid, uuid, text)
   to anon, authenticated;
+
+-- How invites are made, and the only way a poll_participants row gets in
+-- besides an open-mode ballot. One label in, one invite out; a null or blank
+-- label is an unnamed invite. The raw tokens are returned this once and exist
+-- nowhere afterwards — only their sha256 is stored, hashed exactly as
+-- cast_anonymous_vote() hashes what it is handed, so an issued token is a
+-- working invite the moment this returns. Lose one and the fix is to revoke
+-- it and issue another.
+--
+-- The token is 48 bytes from three gen_random_uuid() calls, base64url-encoded
+-- to 64 characters with no padding: 366 random bits, past the 256 asked of
+-- it, and comfortably above cast_anonymous_vote()'s 32-character floor.
+-- gen_random_uuid() rather than pgcrypto's gen_random_bytes() for the same
+-- reason sha256() is used rather than digest(): it is core (Postgres 13+, in
+-- pg_catalog, visible under search_path = ''), while pgcrypto lives in
+-- `extensions` on Supabase and elsewhere on other databases. Both draw on
+-- pg_strong_random(), so nothing is given up; a v4 uuid's 6 fixed version
+-- bits are why it takes three uuids and not two.
+--
+-- Refusals:
+--   PV002  poll does not exist
+--   PV008  the caller is not the poll's author
+--   PV009  the poll is not in invite mode — issuing never flips the mode,
+--          because the owner should choose that, and an open poll that
+--          already has ballots cannot be flipped anyway (PV007)
+--   PV010  the batch is empty or larger than 200
+-- Executable by authenticated only: anon is refused with 42501 before any of
+-- these run.
+create or replace function public.issue_poll_invites(
+  p_poll_id uuid,
+  p_labels text[]
+)
+returns table (token text, label text)
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  poll_mode text;
+  poll_author uuid;
+  batch_size integer := coalesce(cardinality(p_labels), 0);
+  raw_label text;
+begin
+  select pl.participation_mode, p.author_id
+    into poll_mode, poll_author
+  from public.polls as pl
+  join public.posts as p on p.id = pl.post_id
+  where pl.id = p_poll_id
+  for share of pl;
+
+  if poll_mode is null then
+    raise exception 'poll % does not exist', p_poll_id
+      using errcode = 'PV002';
+  end if;
+
+  -- auth.uid() is null for a caller with no session, and that is refused too.
+  if poll_author is distinct from auth.uid() then
+    raise exception 'only the author of poll % can issue its invites', p_poll_id
+      using errcode = 'PV008';
+  end if;
+
+  if poll_mode <> 'invite' then
+    raise exception 'poll % is not invite-only', p_poll_id
+      using errcode = 'PV009';
+  end if;
+
+  if batch_size < 1 or batch_size > 200 then
+    raise exception 'issue between 1 and 200 invites at a time, not %', batch_size
+      using errcode = 'PV010';
+  end if;
+
+  foreach raw_label in array p_labels loop
+    token := translate(
+      encode(
+        uuid_send(gen_random_uuid())
+          || uuid_send(gen_random_uuid())
+          || uuid_send(gen_random_uuid()),
+        'base64'
+      ),
+      '+/',
+      '-_'
+    );
+    label := nullif(btrim(raw_label), '');
+
+    insert into public.poll_participants (poll_id, token_hash, label)
+    values (p_poll_id, encode(sha256(convert_to(token, 'UTF8')), 'hex'), label);
+
+    return next;
+  end loop;
+end;
+$$;
+
+-- Supabase's default privileges grant execute on every new public function to
+-- anon by name, so revoking from public alone would leave anon holding it.
+revoke all on function public.issue_poll_invites(uuid, text[]) from public, anon;
+grant execute on function public.issue_poll_invites(uuid, text[]) to authenticated;
 
 create policy "reactions are public to read"
   on public.reactions
