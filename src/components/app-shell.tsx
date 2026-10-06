@@ -117,15 +117,11 @@ export async function AppShell({
                   aria-current={current ? "page" : undefined}
                   className={`transition hover:text-foreground max-md:flex max-md:min-h-11 max-md:shrink-0 max-md:items-center max-md:border-b-2 max-md:px-3 max-md:whitespace-nowrap max-md:focus-visible:outline-2 max-md:focus-visible:-outline-offset-2 max-md:focus-visible:outline-accent ${
                     current
-                      ? "max-md:border-accent max-md:font-medium"
+                      ? "max-md:border-accent max-md:font-medium max-md:text-foreground"
                       : "max-md:border-transparent"
                   }`}
                 >
-                  {/* Colour sits on the span: the global `a { color: inherit }` in
-                      globals.css is unlayered, so it beats text utilities on <a>. */}
-                  <span className={current ? "max-md:text-foreground" : undefined}>
-                    {item.label}
-                  </span>
+                  {item.label}
                 </Link>
               );
             })}
@@ -160,14 +156,12 @@ export async function AppShell({
                 </Link>
                 <Link
                   href="/auth/sign-up"
-                  className="rounded-full bg-accent-strong px-4 py-2 text-sm font-medium transition hover:brightness-95 active:scale-[0.97]"
+                  className="rounded-full bg-accent-strong px-4 py-2 text-sm font-medium text-white transition hover:brightness-95 active:scale-[0.97]"
                 >
-                  {/* text-white on the spans, not the <a>: the global
-                      `a { color: inherit }` would otherwise win and leave dark
-                      text on the solid fill. The short label keeps the phone
-                      row to one line next to the theme toggle. */}
-                  <span className="text-white md:hidden">Join</span>
-                  <span className="text-white max-md:hidden">Start building</span>
+                  {/* The short label keeps the phone row to one line next to
+                      the theme toggle. */}
+                  <span className="md:hidden">Join</span>
+                  <span className="max-md:hidden">Start building</span>
                 </Link>
               </div>
             )}

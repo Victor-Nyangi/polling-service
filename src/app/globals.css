@@ -101,22 +101,30 @@
   --font-display: var(--font-outfit);
 }
 
-* {
-  box-sizing: border-box;
-}
+/*
+ * Element defaults sit in the base layer, after Tailwind's preflight, so any
+ * utility class still wins over them. Unlayered rules beat every layered
+ * utility regardless of specificity: when `a { color: inherit }` lived out
+ * here, every text-* / hover:* class on a link was silently ignored.
+ */
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
 
-html {
-  scroll-behavior: smooth;
-}
+  html {
+    scroll-behavior: smooth;
+  }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
-  margin: 0;
-}
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+    margin: 0;
+  }
 
-a {
-  color: inherit;
-  text-decoration: none;
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
 }
