@@ -1,6 +1,15 @@
+import { cookies, headers } from "next/headers";
 import Link from "next/link";
-import { signOutAction } from "@/app/actions";
+import { setThemeAction, signOutAction } from "@/app/actions";
+import { safeRedirectPath } from "@/lib/redirect";
 import { isDemoMode } from "@/lib/server/platform";
+import {
+  CURRENT_PATH_HEADER,
+  THEME_COOKIE,
+  THEME_LABELS,
+  THEME_PREFERENCES,
+  parseThemePreference,
+} from "@/lib/theme";
 import type { CurrentUser } from "@/lib/types";
 
 function initials(name: string) {
@@ -10,6 +19,52 @@ function initials(name: string) {
     .join("")
     .slice(0, 2)
     .toUpperCase();
+}
+
+/**
+ * System / Light / Dark, as three submit buttons in one plain form, so it
+ * works without JavaScript: the action sets the cookie and redirects back to
+ * the same path and query string (forwarded by src/proxy.ts).
+ */
+async function ThemeToggle() {
+  const [cookieStore, requestHeaders] = await Promise.all([
+    cookies(),
+    headers(),
+  ]);
+  const current = parseThemePreference(cookieStore.get(THEME_COOKIE)?.value);
+  const redirectTo = safeRedirectPath(requestHeaders.get(CURRENT_PATH_HEADER));
+
+  return (
+    <form action={setThemeAction}>
+      <input type="hidden" name="redirectTo" value={redirectTo} />
+      <div
+        role="group"
+        aria-label="Theme"
+        className="flex rounded-full border border-border p-0.5 font-mono text-xs uppercase tracking-wide"
+      >
+        {THEME_PREFERENCES.map((preference) => {
+          const active = preference === current;
+
+          return (
+            <button
+              key={preference}
+              type="submit"
+              name="theme"
+              value={preference}
+              aria-pressed={active}
+              className={`rounded-full px-2.5 py-1 transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent active:scale-[0.96] ${
+                active
+                  ? "bg-accent/10 font-medium text-accent"
+                  : "text-muted hover:text-foreground"
+              }`}
+            >
+              {THEME_LABELS[preference]}
+            </button>
+          );
+        })}
+      </div>
+    </form>
+  );
 }
 
 export async function AppShell({
@@ -24,7 +79,7 @@ export async function AppShell({
   return (
     <div className="min-h-screen bg-background">
       <header className="border-b border-border bg-card/90 backdrop-blur">
-        <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-6 px-6 py-4 lg:px-10">
+        <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-x-6 gap-y-3 px-6 py-4 lg:px-10">
           <div>
             <Link
               href="/"
@@ -61,7 +116,8 @@ export async function AppShell({
             </Link>
           </nav>
 
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <ThemeToggle />
             {currentUser ? (
               <>
                 <div className="hidden text-right md:block">

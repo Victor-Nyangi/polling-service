@@ -20,6 +20,11 @@ import { buildNoticeHref } from "@/lib/notice";
 import { isPollClosed } from "@/lib/poll-status";
 import { safeRedirectPath } from "@/lib/redirect";
 import { createClient } from "@/lib/supabase/server";
+import {
+  THEME_COOKIE,
+  THEME_COOKIE_MAX_AGE,
+  parseThemePreference,
+} from "@/lib/theme";
 import { validateUsername } from "@/lib/username";
 
 function stringValue(formData: FormData, name: string) {
@@ -181,6 +186,32 @@ export async function signOutAction() {
   const supabase = await createClient();
   await supabase.auth.signOut();
   redirect(buildNoticeHref("/", "success", "Signed out."));
+}
+
+/**
+ * The header theme toggle. Deliberately skips `requireConfigured()`: the theme
+ * is a cookie, not data, so it has to work in demo mode too. No notice either:
+ * the page changing colour is the feedback. `system` clears the cookie, so the
+ * layout omits `data-theme` and the OS preference decides again.
+ */
+export async function setThemeAction(formData: FormData) {
+  const redirectTo = redirectTarget(formData);
+  const preference = parseThemePreference(formData.get("theme"));
+  const cookieStore = await cookies();
+
+  if (preference === "system") {
+    cookieStore.delete(THEME_COOKIE);
+  } else {
+    cookieStore.set(THEME_COOKIE, preference, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+      maxAge: THEME_COOKIE_MAX_AGE,
+    });
+  }
+
+  redirect(redirectTo);
 }
 
 export async function updateProfileAction(formData: FormData) {

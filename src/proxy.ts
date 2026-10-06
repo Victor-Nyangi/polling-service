@@ -1,17 +1,31 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { getSupabasePublicEnv, hasSupabasePublicEnv } from "@/lib/env";
+import { CURRENT_PATH_HEADER } from "@/lib/theme";
 
 // Next.js 16 renamed the `middleware` file convention to `proxy`. This runs
 // before every matched route so the Supabase access token is refreshed and the
 // rotated cookies are written; Server Components cannot write cookies, so
 // without this the session silently expires and the user appears logged out.
+//
+// It also forwards the current path and query string to Server Components as
+// CURRENT_PATH_HEADER (the header theme toggle's `redirectTo`). Next strips its
+// internal `_rsc` query parameter before the proxy sees the URL. The headers
+// are re-cloned on every `next()` so cookies the Supabase client writes onto
+// `request` below still reach the render.
 export async function proxy(request: NextRequest) {
+  const currentPath = `${request.nextUrl.pathname}${request.nextUrl.search}`;
+  const forward = () => {
+    const headers = new Headers(request.headers);
+    headers.set(CURRENT_PATH_HEADER, currentPath);
+    return NextResponse.next({ request: { headers } });
+  };
+
   if (!hasSupabasePublicEnv()) {
-    return NextResponse.next({ request });
+    return forward();
   }
 
-  let response = NextResponse.next({ request });
+  let response = forward();
   const { url, anonKey } = getSupabasePublicEnv();
 
   const supabase = createServerClient(url, anonKey, {
@@ -24,7 +38,7 @@ export async function proxy(request: NextRequest) {
           request.cookies.set(name, value);
         }
 
-        response = NextResponse.next({ request });
+        response = forward();
 
         for (const { name, value, options } of cookiesToSet) {
           response.cookies.set(name, value, options);

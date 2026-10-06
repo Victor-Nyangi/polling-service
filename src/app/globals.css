@@ -11,14 +11,81 @@
  * A single rose value cannot satisfy both roles at once against a near-black
  * dark background, so the two tokens stay distinct in dark mode.
  */
-:root {
+/*
+ * Theme selection. `data-theme` on <html> is set by the root layout from the
+ * `theme` cookie (src/lib/theme.ts) only when the visitor has chosen Light or
+ * Dark; with no attribute ("System"), prefers-color-scheme decides. The dark
+ * tokens therefore appear twice below, one copy per way in, because CSS cannot
+ * share one block between a media query and an attribute selector.
+ * src/lib/theme.test.ts fails if the two copies drift apart.
+ *
+ * --muted (light) was #71717a, which is 4.40:1 on --background: under WCAG AA
+ * for body text. #6e6e77 is the nearest zinc-hued value that clears 4.5:1
+ * (4.59:1 on --background, 4.92:1 on --card).
+ */
+:root,
+[data-theme="light"] {
+  color-scheme: light;
   --background: #f4f4f5;
   --foreground: #18181b;
   --card: #fcfcfd;
-  --muted: #71717a;
+  --muted: #6e6e77;
   --accent: #a6304a;
   --accent-strong: #7d2439;
   --border: #e4e4e7;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --background: #09090b;
+    --foreground: #fafafa;
+    --card: #18181b;
+    --muted: #a1a1aa;
+    --accent: #d8748d;
+    --accent-strong: #cc3354;
+    --border: #27272a;
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --background: #09090b;
+  --foreground: #fafafa;
+  --card: #18181b;
+  --muted: #a1a1aa;
+  --accent: #d8748d;
+  --accent-strong: #cc3354;
+  --border: #27272a;
+}
+
+/*
+ * Tailwind's `dark:` variant defaults to prefers-color-scheme alone, which
+ * would ignore an explicit Light/Dark choice. Redefine it to mirror the token
+ * selectors above, so any remaining `dark:` utility follows the toggle.
+ */
+@custom-variant dark {
+  @media (prefers-color-scheme: dark) {
+    &:where(:root:not([data-theme="light"]), :root:not([data-theme="light"]) *) {
+      @slot;
+    }
+  }
+
+  &:where([data-theme="dark"], [data-theme="dark"] *) {
+    @slot;
+  }
+}
+
+/*
+ * Section 8.B bans pure #ffffff / #000000. `text-white` labels every solid
+ * --accent-strong button and avatar, so the palette's white and black are
+ * pinned to off-values instead of editing each call site: #fafafa is the dark
+ * theme's --foreground, #09090b its --background. #fafafa on --accent-strong
+ * is 9.21:1 (light) and 4.83:1 (dark).
+ */
+@theme {
+  --color-white: #fafafa;
+  --color-black: #09090b;
 }
 
 @theme inline {
@@ -32,18 +99,6 @@
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
   --font-display: var(--font-outfit);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #09090b;
-    --foreground: #fafafa;
-    --card: #18181b;
-    --muted: #a1a1aa;
-    --accent: #d8748d;
-    --accent-strong: #cc3354;
-    --border: #27272a;
-  }
 }
 
 * {
