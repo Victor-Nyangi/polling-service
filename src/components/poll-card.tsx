@@ -6,6 +6,7 @@ import {
   voteOnPollAction,
 } from "@/app/actions";
 import { INVITE_PARAM, type InviteParam, pollVoteAccess } from "@/lib/invite";
+import { voteCountLabel } from "@/lib/poll-labels";
 import type { FeedPost } from "@/lib/types";
 
 function formatDate(isoTimestamp: string) {
@@ -120,7 +121,7 @@ export function PollCard({
               <div className="flex items-center justify-between gap-4">
                 <span>{option.label}</span>
                 <span className="font-mono text-sm text-muted">
-                  {option.votes} votes · {votePercentage(post, option.votes)}%
+                  {voteCountLabel(option.votes)} · {votePercentage(post, option.votes)}%
                 </span>
               </div>
             );

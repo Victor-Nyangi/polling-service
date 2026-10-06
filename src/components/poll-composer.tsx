@@ -84,9 +84,15 @@ export function PollComposer({ currentUser }: { currentUser: CurrentUser | null 
                   defaultChecked={choice.value === "open"}
                   className="mt-1 accent-[var(--accent)]"
                 />
+                {/*
+                  Not text-muted: light --muted is 3.94:1 on the checked card
+                  (--accent at 10% over --background). --foreground at 70% is
+                  5.81:1 checked and 6.26:1 unchecked (light), 8.85:1 and
+                  9.36:1 (dark).
+                */}
                 <span className="grid gap-1">
                   <span className="text-sm font-medium">{choice.title}</span>
-                  <span className="text-sm text-muted">{choice.detail}</span>
+                  <span className="text-sm text-foreground/70">{choice.detail}</span>
                 </span>
               </label>
             ))}

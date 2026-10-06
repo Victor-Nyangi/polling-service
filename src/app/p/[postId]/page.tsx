@@ -11,6 +11,11 @@ import { PollCard } from "@/components/poll-card";
 import { INVITE_PARAM, readInviteParam, summarizeTurnout } from "@/lib/invite";
 import { readNotice } from "@/lib/notice";
 import {
+  participationModeLabel,
+  pollSummaryParts,
+  voteCountLabel,
+} from "@/lib/poll-labels";
+import {
   getCurrentUser,
   getPollInvites,
   getPostById,
@@ -31,18 +36,14 @@ type PostPageProps = {
  */
 const loadPost = cache(getPostById);
 
-function voteLabel(totalVotes: number) {
-  return totalVotes === 1 ? "1 vote" : `${totalVotes} votes`;
-}
-
 function describe(post: FeedPost) {
   const body = post.body?.trim();
 
   if (body) {
-    return `${body} — ${voteLabel(post.poll.totalVotes)} so far on "${post.poll.question}".`;
+    return `${body} — ${voteCountLabel(post.poll.totalVotes)} so far on "${post.poll.question}".`;
   }
 
-  return `${post.poll.options.map((option) => option.label).join(" · ")} — ${voteLabel(
+  return `${post.poll.options.map((option) => option.label).join(" · ")} — ${voteCountLabel(
     post.poll.totalVotes,
   )} so far.`;
 }
@@ -136,8 +137,7 @@ export default async function PostPage({
           >
             @{post.data.author.username}
           </Link>{" "}
-          · {voteLabel(post.data.poll.totalVotes)} ·{" "}
-          {post.data.poll.status === "closed" ? "Closed" : "Open"}
+          · {pollSummaryParts(post.data.poll).join(" · ")}
         </p>
       </section>
 
@@ -193,7 +193,7 @@ async function OwnerPanel({
             Your poll
           </span>
           <h2 className="mt-2 font-display text-xl font-semibold">
-            {mode === "invite" ? "Invite-only" : "Open to anyone"}
+            {participationModeLabel(mode)}
           </h2>
           <p className="mt-1 max-w-prose text-sm text-muted">
             {canSwitch
