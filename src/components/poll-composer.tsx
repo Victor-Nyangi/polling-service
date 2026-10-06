@@ -1,6 +1,20 @@
 import { createPollPostAction } from "@/app/actions";
 import type { CurrentUser } from "@/lib/types";
 
+const PARTICIPATION_CHOICES = [
+  {
+    value: "open",
+    title: "Open",
+    detail: "Anyone can vote: once per account, or once per browser when signed out.",
+  },
+  {
+    value: "invite",
+    title: "Invite-only",
+    detail:
+      "Only people you send an invite link to. Each link casts one vote, and you see turnout, never who chose what.",
+  },
+] as const;
+
 export function PollComposer({ currentUser }: { currentUser: CurrentUser | null }) {
   return (
     <section className="rounded-3xl border border-border bg-card p-6 shadow-sm">
@@ -55,6 +69,29 @@ export function PollComposer({ currentUser }: { currentUser: CurrentUser | null 
             className="rounded-2xl border border-border bg-background px-4 py-3 outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/15"
           />
         </div>
+        <fieldset className="grid gap-2">
+          <legend className="mb-2 text-sm font-medium">Who can vote?</legend>
+          <div className="grid gap-3 md:grid-cols-2">
+            {PARTICIPATION_CHOICES.map((choice) => (
+              <label
+                key={choice.value}
+                className="flex cursor-pointer gap-3 rounded-2xl border border-border bg-background px-4 py-3 transition has-[:checked]:border-accent has-[:checked]:bg-accent/10 has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-accent/40"
+              >
+                <input
+                  type="radio"
+                  name="participationMode"
+                  value={choice.value}
+                  defaultChecked={choice.value === "open"}
+                  className="mt-1 accent-[var(--accent)]"
+                />
+                <span className="grid gap-1">
+                  <span className="text-sm font-medium">{choice.title}</span>
+                  <span className="text-sm text-muted">{choice.detail}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
         <input
           name="hashtags"
           placeholder="Hashtags, comma-separated"

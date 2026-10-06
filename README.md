@@ -63,7 +63,8 @@ All four checks run on every pull request via `.github/workflows/ci.yml`.
 ## Current implemented routes
 
 - `/` — feed, MVP overview, and poll composer
-- `/p/[postId]` — public permalink for one poll post (works signed-out)
+- `/p/[postId]` — public permalink for one poll post (works signed-out); its author also gets the Open / Invite-only switch, invite issuing, and turnout
+- `/p/[postId]?invite=<token>` — an invite link: votes on an invite-only poll, signed in or not, then redirects to the bare permalink
 - `/u/[username]` — public profile and that account's polls (works signed-out)
 - `/auth/login` — email/password sign-in plus Google OAuth entrypoint
 - `/auth/sign-up` — account creation

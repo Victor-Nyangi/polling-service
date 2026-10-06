@@ -58,6 +58,8 @@ export type FeedPost = {
     participationMode?: "open" | "invite";
     /** True when nobody is signed in, i.e. a vote would go the anonymous path. */
     viewerIsAnonymous?: boolean;
+    /** True when the signed-in viewer asked this poll: they get its owner controls. */
+    viewerIsAuthor?: boolean;
   };
   reactions: {
     likes: number;
@@ -88,6 +90,24 @@ export type PublicProfile = {
 export type PublicProfilePage = {
   profile: PublicProfile;
   posts: FeedPost[];
+};
+
+/**
+ * One row of an invite poll's turnout list, for its owner only. Deliberately
+ * carries no time of use: whether an invite was used is the owner's to see,
+ * and a used-at time set beside a live tally is a step towards reading which
+ * way that person voted.
+ */
+export type PollInvite = {
+  /**
+   * `poll_participants.token_hash`, the key a revocation names. Present only
+   * on an unused invite, the only kind that can be revoked, so a used
+   * invite's hash never reaches the page.
+   */
+  tokenHash?: string;
+  label?: string;
+  issuedAt: string;
+  used: boolean;
 };
 
 export type AppNotification = {

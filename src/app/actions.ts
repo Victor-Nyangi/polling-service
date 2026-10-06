@@ -10,12 +10,24 @@ import {
   PARTICIPANT_COOKIE,
   anonymousVoteNotice,
   deriveParticipantToken,
+  inviteVoteNotice,
   isUuid,
   mintBrowserToken,
   parseBrowserToken,
+  participationModeOf,
   recordBallot,
 } from "@/lib/anonymous-vote";
 import { hasSupabasePublicEnv } from "@/lib/env";
+import {
+  INVITE_PARAM,
+  type IssueInvitesResult,
+  inviteAdminNotice,
+  invitePath,
+  isInviteToken,
+  isTokenHash,
+  parseInviteLabels,
+  withoutInviteParam,
+} from "@/lib/invite";
 import { buildNoticeHref } from "@/lib/notice";
 import { isPollClosed } from "@/lib/poll-status";
 import { safeRedirectPath } from "@/lib/redirect";
@@ -267,6 +279,9 @@ export async function createPollPostAction(formData: FormData) {
   const body = stringValue(formData, "body");
   const question = stringValue(formData, "question");
   const hashtags = toHashtags(stringValue(formData, "hashtags"));
+  const participationMode = participationModeOf(
+    stringValue(formData, "participationMode"),
+  );
   const options = ["option1", "option2", "option3", "option4"]
     .map((name) => stringValue(formData, name))
     .filter(Boolean);
@@ -307,6 +322,7 @@ export async function createPollPostAction(formData: FormData) {
     .insert({
       post_id: post.id,
       question,
+      participation_mode: participationMode,
     })
     .select("id")
     .single();
@@ -338,6 +354,19 @@ export async function createPollPostAction(formData: FormData) {
   }
 
   revalidatePath("/");
+
+  // An invite poll takes no votes until its owner hands out links, and the
+  // links are issued on the poll's own page, so that is where they land.
+  if (participationMode === "invite") {
+    redirect(
+      buildNoticeHref(
+        `/p/${post.id}`,
+        "success",
+        "Invite-only poll created. Issue its invite links below.",
+      ),
+    );
+  }
+
   redirect(buildNoticeHref("/", "success", "Poll post created."));
 }
 
@@ -400,11 +429,73 @@ async function voteAnonymously(
   redirect(buildNoticeHref(redirectTo, "success", "Vote recorded."));
 }
 
+/**
+ * A ballot cast through an invite link, signed in or not. The raw invite token
+ * goes to `cast_anonymous_vote`, which hashes it and matches it against an
+ * unused `poll_participants` row. Never the signed-in insert: the database
+ * refuses any `voter_id` ballot on an invite poll (PV006), so a signed-in
+ * person with an invite votes exactly as an anonymous one does.
+ *
+ * Every outcome redirects to `redirectTo` with the invite param stripped, so
+ * the token leaves the address bar with the first vote, and it is never
+ * logged or stored: the database keeps only its sha256.
+ */
+async function voteWithInvite(
+  redirectTo: string,
+  pollId: string,
+  optionId: string,
+  inviteToken: string,
+): Promise<never> {
+  const target = withoutInviteParam(redirectTo);
+
+  if (!isInviteToken(inviteToken)) {
+    const notice = inviteVoteNotice("PV004");
+    return redirectWithNotice(target, notice.type, notice.message);
+  }
+
+  if (!isUuid(pollId) || !isUuid(optionId)) {
+    return redirectWithNotice(target, "error", "That poll is no longer available.");
+  }
+
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("cast_anonymous_vote", {
+    p_poll_id: pollId,
+    p_option_id: optionId,
+    p_token: inviteToken,
+  });
+
+  if (error) {
+    const notice = inviteVoteNotice(error.code);
+    return redirectWithNotice(target, notice.type, notice.message);
+  }
+
+  const cookieStore = await cookies();
+  cookieStore.set(
+    BALLOT_MARKER_COOKIE,
+    recordBallot(cookieStore.get(BALLOT_MARKER_COOKIE)?.value, pollId, optionId),
+    anonymousCookieOptions,
+  );
+
+  revalidatePath("/");
+  redirect(buildNoticeHref(target, "success", "Vote recorded."));
+}
+
 export async function voteOnPollAction(formData: FormData) {
   const redirectTo = redirectTarget(formData);
   await requireConfigured(redirectTo);
   const pollId = stringValue(formData, "pollId");
   const optionId = stringValue(formData, "optionId");
+  // Read raw, not trimmed: a token with whitespace around it is not one this
+  // database issued, and should be refused as such.
+  const inviteField = formData.get(INVITE_PARAM);
+
+  // Only PollCard's invite-link buttons send this field, and only for invite
+  // polls. Its presence decides the path before the session is even looked
+  // at, because on an invite poll the signed-in path can only fail.
+  if (typeof inviteField === "string" && inviteField !== "") {
+    await voteWithInvite(redirectTo, pollId, optionId, inviteField);
+  }
+
   const supabase = await createClient();
   const {
     data: { user },
@@ -437,13 +528,19 @@ export async function voteOnPollAction(formData: FormData) {
   // refusal reads as a notice instead of a raw Postgres exception.
   const { data: poll } = await supabase
     .from("polls")
-    .select("status, closes_at")
+    .select("status, closes_at, participation_mode")
     .eq("id", pollId)
     .maybeSingle();
 
   if (!poll) {
     await redirectWithNotice(redirectTo, "error", "That poll is no longer available.");
     throw new Error("Poll missing after redirect guard.");
+  }
+
+  // PV006 in the database is the guarantee; this read only words it better.
+  if (participationModeOf(poll.participation_mode) === "invite") {
+    const notice = inviteVoteNotice("PV006");
+    await redirectWithNotice(redirectTo, notice.type, notice.message);
   }
 
   if (isPollClosed({ status: poll.status, closesAt: poll.closes_at })) {
@@ -471,12 +568,167 @@ export async function voteOnPollAction(formData: FormData) {
     voter_id: user.id,
   });
 
+  // PV006: the owner switched the poll to invite-only after the read above.
+  if (error?.code === "PV006") {
+    const notice = inviteVoteNotice(error.code);
+    await redirectWithNotice(redirectTo, notice.type, notice.message);
+  }
+
   if (error) {
     await redirectWithNotice(redirectTo, "error", error.message);
   }
 
   revalidatePath("/");
   redirect(buildNoticeHref(redirectTo, "success", "Vote recorded."));
+}
+
+/**
+ * Open / Invite-only, switched by the poll's owner on its permalink while it
+ * has no votes. The update grant covers `participation_mode` alone, the RLS
+ * policy limits it to the author, and `freeze_participation_mode_once_voted`
+ * refuses it once a ballot exists (PV007), including one that lands between
+ * the page rendering the switch and this running.
+ */
+export async function setParticipationModeAction(formData: FormData) {
+  const redirectTo = redirectTarget(formData);
+  await requireConfigured(redirectTo);
+  const pollId = stringValue(formData, "pollId");
+  const mode = participationModeOf(stringValue(formData, "mode"));
+
+  if (!isUuid(pollId)) {
+    await redirectWithNotice(redirectTo, "error", "That poll is no longer available.");
+  }
+
+  const { supabase } = await requireAuthenticatedUser(redirectTo);
+  const { data, error } = await supabase
+    .from("polls")
+    .update({ participation_mode: mode })
+    .eq("id", pollId)
+    .select("id");
+
+  if (error) {
+    const notice = inviteAdminNotice(error.code);
+    await redirectWithNotice(redirectTo, notice.type, notice.message);
+  }
+
+  // RLS filters a non-owner's update down to zero rows rather than erroring.
+  if (!data || data.length === 0) {
+    const notice = inviteAdminNotice("PV008");
+    await redirectWithNotice(redirectTo, notice.type, notice.message);
+  }
+
+  revalidatePath("/");
+  revalidatePath(redirectTo);
+  redirect(
+    buildNoticeHref(
+      redirectTo,
+      "success",
+      mode === "invite"
+        ? "This poll is now invite-only. Issue invite links below."
+        : "Anyone with the link can vote on this poll now.",
+    ),
+  );
+}
+
+/**
+ * Issues a batch of invites and returns their links in this response, once.
+ *
+ * Unlike every other action here it returns a value instead of redirecting,
+ * because the links must not survive this response: a redirect would have to
+ * carry them in its URL or in a cookie, and either would store a bearer
+ * credential. The caller is the one Client Component that renders them
+ * (`InviteIssuer`), which drops them on the next navigation or reload. The
+ * function takes no previous state, so the links of one batch are never sent
+ * back to the server with the next. Nothing here logs.
+ */
+export async function issuePollInvitesAction(
+  formData: FormData,
+): Promise<IssueInvitesResult> {
+  const redirectTo = redirectTarget(formData);
+  await requireConfigured(redirectTo);
+  const pollId = stringValue(formData, "pollId");
+  const rawLabels = formData.get("labels");
+  // Not trimmed: a leading or trailing blank line is an unnamed invite.
+  const parsed = parseInviteLabels(typeof rawLabels === "string" ? rawLabels : "");
+
+  if (!isUuid(pollId)) {
+    return { status: "error", message: inviteAdminNotice("PV002").message };
+  }
+
+  if (!parsed.ok) {
+    return { status: "error", message: parsed.message };
+  }
+
+  const { supabase } = await requireAuthenticatedUser(redirectTo);
+
+  // The links name the post, not the poll, and the post comes from the
+  // database rather than the form, so a link always opens the poll it votes on.
+  const { data: poll } = await supabase
+    .from("polls")
+    .select("post_id")
+    .eq("id", pollId)
+    .maybeSingle();
+
+  if (!poll) {
+    return { status: "error", message: inviteAdminNotice("PV002").message };
+  }
+
+  const { data, error } = await supabase.rpc("issue_poll_invites", {
+    p_poll_id: pollId,
+    p_labels: parsed.labels,
+  });
+
+  if (error || !Array.isArray(data)) {
+    return { status: "error", message: inviteAdminNotice(error?.code).message };
+  }
+
+  const origin = await appOrigin();
+  const postId = String(poll.post_id);
+
+  revalidatePath(`/p/${postId}`);
+
+  return {
+    status: "issued",
+    links: (data as Array<{ token: unknown; label: unknown }>).map((row) => ({
+      label: typeof row.label === "string" && row.label ? row.label : null,
+      url: `${origin}${invitePath(postId, String(row.token))}`,
+    })),
+  };
+}
+
+/**
+ * Revokes one unused invite by deleting its row. A used invite stands for a
+ * ballot in the tally, and `keep_used_invites` refuses it with PV011.
+ */
+export async function revokeInviteAction(formData: FormData) {
+  const redirectTo = redirectTarget(formData);
+  await requireConfigured(redirectTo);
+  const pollId = stringValue(formData, "pollId");
+  const tokenHash = stringValue(formData, "tokenHash");
+
+  if (!isUuid(pollId) || !isTokenHash(tokenHash)) {
+    await redirectWithNotice(redirectTo, "error", "That invite is already gone.");
+  }
+
+  const { supabase } = await requireAuthenticatedUser(redirectTo);
+  const { data, error } = await supabase
+    .from("poll_participants")
+    .delete()
+    .eq("poll_id", pollId)
+    .eq("token_hash", tokenHash)
+    .select("token_hash");
+
+  if (error) {
+    const notice = inviteAdminNotice(error.code);
+    await redirectWithNotice(redirectTo, notice.type, notice.message);
+  }
+
+  if (!data || data.length === 0) {
+    await redirectWithNotice(redirectTo, "error", "That invite is already gone.");
+  }
+
+  revalidatePath(redirectTo);
+  redirect(buildNoticeHref(redirectTo, "success", "Invite revoked. Its link no longer works."));
 }
 
 export async function setReactionAction(formData: FormData) {

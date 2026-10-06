@@ -25,6 +25,7 @@ import type {
   FeedPost,
   Loaded,
   ModerationReport,
+  PollInvite,
   PollOption,
   PublicProfilePage,
 } from "@/lib/types";
@@ -84,24 +85,21 @@ function formatProfile(profile: Record<string, unknown> | null | undefined) {
 }
 
 /**
- * What the post mapper needs to know about who is looking. `ballots` is set
- * only for an anonymous viewer: their `pv_ballots` marker cookie, written by
- * `voteOnPollAction` after a successful anonymous vote.
+ * What the post mapper needs to know about who is looking. `ballots` is this
+ * browser's `pv_ballots` marker cookie, written by `voteOnPollAction` after a
+ * successful anonymous or invite vote. It is read for every viewer, because a
+ * signed-in person who votes through an invite link casts a token ballot too.
  */
 type Viewer = {
   id: string | undefined;
-  ballots: BallotMarker | undefined;
+  ballots: BallotMarker;
 };
 
 async function resolveViewer(currentUser: CurrentUser | null): Promise<Viewer> {
-  if (currentUser) {
-    return { id: currentUser.id, ballots: undefined };
-  }
-
   const cookieStore = await cookies();
 
   return {
-    id: undefined,
+    id: currentUser?.id,
     ballots: parseBallotMarker(cookieStore.get(BALLOT_MARKER_COOKIE)?.value),
   };
 }
@@ -139,11 +137,17 @@ function mapFeedPost(
     .sort((left, right) => left.position - right.position);
   const totalVotes = options.reduce((sum, option) => sum + option.votes, 0);
   const pollId = String(pollRow.id);
-  // An anonymous viewer has no poll_votes row they can read (RLS keys on
-  // auth.uid()), so their choice comes from the marker cookie instead — and
-  // only if it names an option this poll actually has.
-  const markedOptionId = viewer.ballots?.get(pollId.toLowerCase());
-  const viewerVoteOptionId = viewer.ballots
+  const participationMode = participationModeOf(pollRow.participation_mode);
+  const author = formatProfile(firstEmbedded(row.author));
+  // A token ballot (anonymous, or any invite ballot) has no poll_votes row its
+  // voter can read (RLS keys on auth.uid()), so that choice comes from the
+  // marker cookie instead, and only if it names an option this poll actually
+  // has. Every ballot on an invite poll is a token ballot, signed in or not.
+  // On an open poll a signed-in viewer's own row wins: a marker left from
+  // voting there anonymously is not the ballot their account cast.
+  const markedOptionId = viewer.ballots.get(pollId.toLowerCase());
+  const usesMarker = viewerId === undefined || participationMode === "invite";
+  const viewerVoteOptionId = usesMarker
     ? options.find((option) => option.id.toLowerCase() === markedOptionId)?.id
     : typeof viewerVote?.option_id === "string"
       ? viewerVote.option_id
@@ -160,7 +164,7 @@ function mapFeedPost(
     // `author:profiles!posts_author_id_fkey` is to-one, so this arrives as an
     // object today. Normalising it anyway means a schema change that flips the
     // shape degrades to the "New user" fallbacks instead of mis-rendering.
-    author: formatProfile(firstEmbedded(row.author)),
+    author,
     poll: {
       id: pollId,
       question: String(pollRow.question ?? "Untitled poll"),
@@ -168,8 +172,9 @@ function mapFeedPost(
       options,
       totalVotes,
       viewerVoteOptionId,
-      participationMode: participationModeOf(pollRow.participation_mode),
+      participationMode,
       viewerIsAnonymous: viewerId === undefined,
+      viewerIsAuthor: viewerId !== undefined && viewerId === author.id,
     },
     reactions: {
       likes: reactionRows.filter((reaction) => reaction.reaction_type === "like")
@@ -362,6 +367,53 @@ export async function getPostById(
   // crashing the permalink.
   return {
     data: mapFeedPost(rows[0], viewer, voteCounts),
+    failed: false,
+  };
+}
+
+/**
+ * An invite poll's turnout list, for `/p/[postId]` when its author is looking.
+ * The "poll owners manage their participants" policy returns rows only to the
+ * poll's author, so anyone else gets an empty list, never someone's invites.
+ *
+ * Reads `used_at` only to reduce it to a yes/no (see `PollInvite`). Nothing
+ * here, or anywhere the owner can reach, touches `poll_votes.participant_hash`:
+ * that column is unreadable, and it is the only thing that could join an
+ * invite to the option it chose.
+ */
+export async function getPollInvites(
+  pollId: string,
+): Promise<Loaded<PollInvite[]>> {
+  if (!hasSupabasePublicEnv() || !UUID_PATTERN.test(pollId)) {
+    return { data: [], failed: false };
+  }
+
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("poll_participants")
+    .select("token_hash, label, issued_at, used_at")
+    .eq("poll_id", pollId)
+    .order("issued_at", { ascending: true })
+    .order("label", { ascending: true, nullsFirst: false });
+
+  if (error || !data) {
+    return { data: [], failed: true };
+  }
+
+  return {
+    data: data.map((row) => {
+      const used = row.used_at !== null && row.used_at !== undefined;
+
+      return {
+        tokenHash: used ? undefined : String(row.token_hash),
+        label:
+          typeof row.label === "string" && row.label.trim()
+            ? row.label
+            : undefined,
+        issuedAt: String(row.issued_at ?? new Date().toISOString()),
+        used,
+      };
+    }),
     failed: false,
   };
 }

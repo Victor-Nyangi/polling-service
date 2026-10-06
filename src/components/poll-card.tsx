@@ -5,6 +5,7 @@ import {
   toggleRepostAction,
   voteOnPollAction,
 } from "@/app/actions";
+import { INVITE_PARAM, type InviteParam, pollVoteAccess } from "@/lib/invite";
 import type { FeedPost } from "@/lib/types";
 
 function formatDate(isoTimestamp: string) {
@@ -22,24 +23,39 @@ function votePercentage(post: FeedPost, optionVotes: number) {
   return Math.round((optionVotes / post.poll.totalVotes) * 100);
 }
 
+function inviteOnlyNote(invite: InviteParam, hasVoted: boolean) {
+  if (invite.kind === "malformed") {
+    return "This invite link isn't valid for this poll.";
+  }
+
+  return hasVoted
+    ? "Your vote is in. This poll is invite-only."
+    : "This poll is invite-only, so voting needs an invite link.";
+}
+
 /**
  * `redirectTo` is where the engagement actions send the visitor afterwards, so
  * a vote cast on `/p/[postId]` comes back to that permalink instead of the
  * feed. Every form already carries it; the default keeps the feed unchanged.
+ * It never carries an invite token: the permalink page passes the bare path.
+ *
+ * `invite` is the permalink's `?invite=` param. Only an invite poll uses it:
+ * with a well-formed token the buttons carry it as a hidden field, so the
+ * vote goes through `cast_anonymous_vote` whoever is signed in; without one
+ * the poll is results only, for everyone, since any other ballot on it is
+ * refused (PV004 anonymous, PV006 signed in).
  */
 export function PollCard({
   post,
   redirectTo = "/",
+  invite = { kind: "none" },
 }: {
   post: FeedPost;
   redirectTo?: string;
+  invite?: InviteParam;
 }) {
-  // Anonymous ballots on an invite-mode poll need a pre-issued token, which
-  // this app does not hand out yet, so a signed-out viewer gets the results
-  // without buttons rather than a button that can only answer PV004. Signed-in
-  // voters keep the existing path.
-  const inviteOnly =
-    post.poll.participationMode === "invite" && post.poll.viewerIsAnonymous === true;
+  const access = pollVoteAccess(post.poll.participationMode, invite);
+  const permalink = `/p/${post.id}`;
 
   return (
     <article className="rounded-3xl border border-border bg-card p-6 shadow-sm">
@@ -84,9 +100,17 @@ export function PollCard({
         <h3 className="mt-2 font-display text-lg font-semibold">
           {post.poll.question}
         </h3>
-        {inviteOnly ? (
+        {access === "read-only" ? (
           <p className="mt-2 text-sm text-muted">
-            This poll is invite-only, so voting needs an invite link.
+            {inviteOnlyNote(invite, Boolean(post.poll.viewerVoteOptionId))}
+            {post.poll.viewerIsAuthor && redirectTo !== permalink ? (
+              <>
+                {" "}
+                <Link href={permalink} className="text-accent transition hover:underline">
+                  Manage invite links
+                </Link>
+              </>
+            ) : null}
           </p>
         ) : null}
         <div className="mt-4 grid gap-3">
@@ -101,11 +125,13 @@ export function PollCard({
               </div>
             );
 
-            if (inviteOnly) {
+            if (access === "read-only") {
               return (
                 <div
                   key={option.id}
-                  className="rounded-2xl border border-border bg-card px-4 py-3"
+                  className={`rounded-2xl border px-4 py-3 ${
+                    isSelected ? "border-accent bg-accent/10" : "border-border bg-card"
+                  }`}
                 >
                   {tally}
                 </div>
@@ -117,6 +143,9 @@ export function PollCard({
                 <input type="hidden" name="redirectTo" value={redirectTo} />
                 <input type="hidden" name="pollId" value={post.poll.id} />
                 <input type="hidden" name="optionId" value={option.id} />
+                {access === "invite" && invite.kind === "token" ? (
+                  <input type="hidden" name={INVITE_PARAM} value={invite.token} />
+                ) : null}
                 <button
                   type="submit"
                   className={`rounded-2xl border px-4 py-3 text-left transition active:scale-[0.99] ${

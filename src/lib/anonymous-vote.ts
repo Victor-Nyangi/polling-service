@@ -17,9 +17,9 @@ export function isUuid(value: string): boolean {
 
 /**
  * `polls.participation_mode`, normalised. Anything but an exact `'invite'` is
- * open, matching the column default. Erring open only decides whether an
- * anonymous viewer is shown vote buttons; `cast_anonymous_vote` reads the real
- * column and refuses with PV004 regardless.
+ * open, matching the column default. Erring open only decides whether a
+ * viewer is shown vote buttons; the database reads the real column and
+ * refuses with PV004 or PV006 regardless.
  */
 export function participationModeOf(value: unknown): "open" | "invite" {
   return value === "invite" ? "invite" : "open";
@@ -201,5 +201,42 @@ export function anonymousVoteNotice(code: string | undefined): VoteNotice {
     // nothing the voter can fix — so it reads like any other failure.
     default:
       return FALLBACK_NOTICE;
+  }
+}
+
+/**
+ * The same refusals, read for a ballot cast through an invite link. There the
+ * token is the person's invitation rather than this browser's identity, so
+ * PV004 and PV005 are about the link, not the poll. PV006 (a signed-in ballot
+ * on an invite poll) cannot come back from `cast_anonymous_vote`, but the
+ * signed-in path can still race a mode switch into it, so it is mapped here
+ * for both callers. Closed, missing poll, and wrong option read as they do
+ * for an open poll.
+ */
+export function inviteVoteNotice(code: string | undefined): VoteNotice {
+  switch (code) {
+    case "PV004":
+      return {
+        type: "error",
+        message: "This invite link isn't valid for this poll.",
+      };
+    case "PV005":
+      return { type: "info", message: "This invite has already been used." };
+    case "PV006":
+      return {
+        type: "info",
+        message: "This poll is invite-only, so voting needs an invite link.",
+      };
+    case "23514":
+    case "PV002":
+    case "PV003":
+      return anonymousVoteNotice(code);
+    // The redirect after an invite vote drops the token from the address, so
+    // retrying means opening the link again, and the message has to say so.
+    default:
+      return {
+        type: "error",
+        message: "We couldn't record your vote. Open your invite link again to retry.",
+      };
   }
 }
