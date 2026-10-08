@@ -29,7 +29,9 @@ cp .env.example .env.local
 
 4. Apply the SQL in `supabase/schema.sql` using the Supabase SQL editor, then
    run `supabase/verify.sql` and confirm it reports
-   `verify.sql: all assertions passed`.
+   `verify.sql: all assertions passed`. Then run `supabase/verify-rls.sql`,
+   which checks cross-account row-level security and shows one PASS/FAIL row
+   per check (the header of that file lists the FAILs known when it was written).
 
 5. Start the app:
 
@@ -96,6 +98,11 @@ selects `profiles.onboarded_at`, which does not exist until step 1.
    `verify.sql: all assertions passed`. This exercises the signup trigger, the
    notification triggers, and the column-level privileges; everything it creates
    is rolled back.
+   Then run `supabase/verify-rls.sql`. It signs in as two throwaway users and
+   as anon, tries to read and change the other user's rows in every user-owned
+   table, and shows one row per check with PASS or FAIL. It also ends in
+   `rollback`. Any FAIL that isn't in the file's "known fails" header is a
+   regression.
 4. From **Project Settings → API**, copy the project URL, the `anon` public key,
    and the `service_role` secret key.
 
@@ -156,8 +163,8 @@ notification triggers, and session persistence are all working together.
 ### Ongoing
 
 - **Schema changes**: edit `supabase/schema.sql`, re-run it in the SQL editor,
-  then re-run `supabase/verify.sql`. There is no migration tool — keep every
-  statement re-runnable.
+  then re-run `supabase/verify.sql` and `supabase/verify-rls.sql`. There is no
+  migration tool — keep every statement re-runnable.
 - **Preview deployments**: Vercel builds every pull request. They share the
   production database unless you point Preview at a separate Supabase project.
 - **Environments**: keep `development` and `production` only. Add staging when
