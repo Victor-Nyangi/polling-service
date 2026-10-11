@@ -882,10 +882,23 @@ create policy "staff can read all reports"
     )
   );
 
+-- A new report must arrive the way createReportAction files it: open and
+-- unreviewed. status, reviewed_by and reviewed_at belong to staff, who set them
+-- through "staff can update reports". Checking only reporter_id let a user file
+-- a report that was already closed and named someone else as its reviewer.
+-- This is a WITH CHECK rather than a column grant (the pattern used for UPDATE
+-- on profiles and polls) because an INSERT check sees the whole new row and can
+-- pin these columns to their initial values; an UPDATE check cannot see the old
+-- row, which is why those tables need column grants instead.
 create policy "users can create reports"
   on public.reports
   for insert
-  with check (auth.uid() = reporter_id);
+  with check (
+    auth.uid() = reporter_id
+    and status = 'open'
+    and reviewed_by is null
+    and reviewed_at is null
+  );
 
 create policy "staff can update reports"
   on public.reports

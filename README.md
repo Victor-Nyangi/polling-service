@@ -165,6 +165,9 @@ notification triggers, and session persistence are all working together.
 - **Schema changes**: edit `supabase/schema.sql`, re-run it in the SQL editor,
   then re-run `supabase/verify.sql` and `supabase/verify-rls.sql`. There is no
   migration tool — keep every statement re-runnable.
+- **Pending re-paste (2026-10-11)**: "users can create reports" now requires a
+  new report to be `open` with no reviewer; the owner must re-paste `schema.sql`
+  into the live database, then re-run both verify files (expect 139 PASS, 1 FAIL: reactions).
 - **Preview deployments**: Vercel builds every pull request. They share the
   production database unless you point Preview at a separate Supabase project.
 - **Environments**: keep `development` and `production` only. Add staging when

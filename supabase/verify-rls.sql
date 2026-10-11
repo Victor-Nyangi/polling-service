@@ -40,19 +40,19 @@
 -- `actual` shows which form it took. An expected `allowed: ...` must match
 -- exactly.
 --
--- KNOWN FAILS AT THE TIME OF WRITING (2026-10-08). Two checks expect behaviour
--- the current schema.sql does not give, on purpose, so they show FAIL until a
--- decision is made. Each carries a `note`:
---   * reports: a user can file a report that is already closed and names
---     someone else as its reviewer. "users can create reports" checks only
---     reporter_id. Too permissive.
+-- KNOWN FAILS. One check expects behaviour the current schema.sql does not
+-- give, on purpose, so it shows FAIL until a decision is made. It carries a
+-- `note`:
 --   * reactions: switching your own like to a dislike is refused. The app does
 --     it with an upsert (toggleReactionAction), whose conflict path is an
 --     UPDATE, and reactions has no UPDATE policy. Too restrictive: an app bug,
 --     not a hole.
 -- Tested 2026-10-08 against a local supabase/postgres 17.6.1.166 image with
--- schema.sql applied: 140 checks, 138 PASS, those 2 FAIL. Not yet run against
--- the live database.
+-- schema.sql applied: 140 checks, 138 PASS, 2 FAIL. The second FAIL was a
+-- reports hole (a user could file a report already closed and "reviewed" by
+-- someone else, because "users can create reports" checked only reporter_id);
+-- schema.sql closed it on 2026-10-11 and the same local run gave 139 PASS, the
+-- reactions one FAIL. Not yet run against the live database.
 --
 -- FIXTURES. Every fixture id comes from pg_temp.id('<key>') and every invite or
 -- ballot hash from pg_temp.h('<key>'). An unknown key raises instead of
@@ -608,8 +608,7 @@ begin
     $q$select 1 from public.reports where id = pg_temp.id('A_report')$q$);
   perform pg_temp.expect_write('reports', 'A files a report already closed, "reviewed" by B', 'denied: 42501',
     $q$insert into public.reports (reporter_id, target_type, target_post_id, reason, status, reviewed_by, reviewed_at)
-       values (pg_temp.id('A'), 'post', pg_temp.id('B_plain_post'), 'pre-closed', 'closed', pg_temp.id('B'), now())$q$,
-    p_note => 'KNOWN FAIL (too permissive): "users can create reports" checks reporter_id only, so status/reviewed_by/reviewed_at are the reporter''s to set');
+       values (pg_temp.id('A'), 'post', pg_temp.id('B_plain_post'), 'pre-closed', 'closed', pg_temp.id('B'), now())$q$);
   perform pg_temp.expect_write('reports', 'control: A files a report', 'allowed: 1 rows',
     $q$insert into public.reports (reporter_id, target_type, target_post_id, reason)
        values (pg_temp.id('A'), 'post', pg_temp.id('B_plain_post'), 'verify-rls')$q$);
