@@ -945,6 +945,16 @@ create policy "users can update their own posts"
   using (auth.uid() = author_id)
   with check (auth.uid() = author_id);
 
+-- The policy above is row-level and Supabase's table-wide UPDATE grant covers
+-- every column, so on its own it lets an author move their own post's
+-- created_at (to 2999, say, to sit at the top of the feed) after the insert
+-- check above has passed, or rewrite hashtags and the body under votes already
+-- cast. The app has no post editing: nothing in src/ updates posts, and staff
+-- moderate through reports, not by changing posts. So the grant is revoked and
+-- no column is handed back. The policy stays so that a later edit feature only
+-- has to grant its columns back (body, say), never created_at or author_id.
+revoke update on public.posts from anon, authenticated;
+
 create policy "users can delete their own posts"
   on public.posts
   for delete

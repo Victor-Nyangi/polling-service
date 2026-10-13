@@ -168,9 +168,10 @@ notification triggers, and session persistence are all working together.
 - **Pending re-paste (2026-10-11, extended 2026-10-13)**: "users can create
   reports" now requires a new report to be `open` with no reviewer, and both it
   and "users can create their own posts" require `created_at` to be the
-  server's `now()` (a client-supplied timestamp is refused); the owner must
-  re-paste `schema.sql` into the live database, then re-run both verify files
-  (expect 142 checks, 141 PASS, 1 FAIL: reactions).
+  server's `now()` (a client-supplied timestamp is refused). Posts also lost
+  their UPDATE grant: the app has no post editing, so no column is granted back.
+  The owner must re-paste `schema.sql` into the live database, then re-run both
+  verify files (expect 143 checks, 142 PASS, 1 FAIL: reactions).
 - **Preview deployments**: Vercel builds every pull request. They share the
   production database unless you point Preview at a separate Supabase project.
 - **Environments**: keep `development` and `production` only. Add staging when

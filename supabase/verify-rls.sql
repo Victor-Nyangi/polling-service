@@ -57,7 +57,11 @@
 -- schema.sql pinned created_at in "users can create reports": 141 checks,
 -- 140 PASS, the reactions one FAIL. The same was then done for posts (a
 -- future-dated post would sit at the top of the feed): 142 checks, 141 PASS,
--- the reactions one FAIL. Not yet run against the live database.
+-- the reactions one FAIL. Then posts lost its UPDATE grant (the app never
+-- edits a post, and an author could otherwise move created_at by UPDATE): the
+-- "A edits own post" control became a denial, a created_at UPDATE check was
+-- added, and the run gave 143 checks, 142 PASS, the reactions one FAIL. Not
+-- yet run against the live database.
 --
 -- FIXTURES. Every fixture id comes from pg_temp.id('<key>') and every invite or
 -- ballot hash from pg_temp.h('<key>'). An unknown key raises instead of
@@ -456,7 +460,12 @@ begin
     $q$insert into public.posts (author_id, body, created_at) values (pg_temp.id('A'), 'pinned', '2999-01-01 00:00:00+00')$q$);
   perform pg_temp.expect_write('posts', 'control: A creates a post', 'allowed: 1 rows',
     $q$insert into public.posts (author_id, body) values (pg_temp.id('A'), 'verify-rls new post')$q$);
-  perform pg_temp.expect_write('posts', 'control: A edits own post', 'allowed: 1 rows',
+  -- The app has no post editing, so posts has no UPDATE grant at all: even the
+  -- author's own row refuses every column. If an edit feature grants a column
+  -- back, turn the matching check below into an 'allowed: 1 rows' control.
+  perform pg_temp.expect_write('posts', 'A moves own post''s created_at (future-dated)', 'denied: 42501',
+    $q$update public.posts set created_at = '2999-01-01 00:00:00+00' where id = pg_temp.id('A_plain_post')$q$);
+  perform pg_temp.expect_write('posts', 'A edits own post body (no edit feature)', 'denied: 42501',
     $q$update public.posts set body = 'edited' where id = pg_temp.id('A_plain_post')$q$);
   perform pg_temp.expect_write('posts', 'control: A deletes own post', 'allowed: 1 rows',
     $q$delete from public.posts where id = pg_temp.id('A_plain_post')$q$);
