@@ -166,10 +166,11 @@ notification triggers, and session persistence are all working together.
   then re-run `supabase/verify.sql` and `supabase/verify-rls.sql`. There is no
   migration tool — keep every statement re-runnable.
 - **Pending re-paste (2026-10-11, extended 2026-10-13)**: "users can create
-  reports" now requires a new report to be `open` with no reviewer, and its
-  `created_at` to be the server's `now()` (a client-supplied timestamp is
-  refused); the owner must re-paste `schema.sql` into the live database, then
-  re-run both verify files (expect 141 checks, 140 PASS, 1 FAIL: reactions).
+  reports" now requires a new report to be `open` with no reviewer, and both it
+  and "users can create their own posts" require `created_at` to be the
+  server's `now()` (a client-supplied timestamp is refused); the owner must
+  re-paste `schema.sql` into the live database, then re-run both verify files
+  (expect 142 checks, 141 PASS, 1 FAIL: reactions).
 - **Preview deployments**: Vercel builds every pull request. They share the
   production database unless you point Preview at a separate Supabase project.
 - **Environments**: keep `development` and `production` only. Add staging when

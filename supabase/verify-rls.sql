@@ -55,7 +55,9 @@
 -- reactions one FAIL. On 2026-10-13 a reports check for a client-supplied
 -- created_at was added (it failed, 141 checks, 139 PASS, 2 FAIL) and
 -- schema.sql pinned created_at in "users can create reports": 141 checks,
--- 140 PASS, the reactions one FAIL. Not yet run against the live database.
+-- 140 PASS, the reactions one FAIL. The same was then done for posts (a
+-- future-dated post would sit at the top of the feed): 142 checks, 141 PASS,
+-- the reactions one FAIL. Not yet run against the live database.
 --
 -- FIXTURES. Every fixture id comes from pg_temp.id('<key>') and every invite or
 -- ballot hash from pg_temp.h('<key>'). An unknown key raises instead of
@@ -450,6 +452,8 @@ begin
     $q$insert into public.posts (author_id, body) values (pg_temp.id('B'), 'forged')$q$);
   perform pg_temp.expect_write('posts', 'A hands own post to B', 'denied: 42501',
     $q$update public.posts set author_id = pg_temp.id('B') where id = pg_temp.id('A_plain_post')$q$);
+  perform pg_temp.expect_write('posts', 'A creates a post with its own created_at (future-dated)', 'denied: 42501',
+    $q$insert into public.posts (author_id, body, created_at) values (pg_temp.id('A'), 'pinned', '2999-01-01 00:00:00+00')$q$);
   perform pg_temp.expect_write('posts', 'control: A creates a post', 'allowed: 1 rows',
     $q$insert into public.posts (author_id, body) values (pg_temp.id('A'), 'verify-rls new post')$q$);
   perform pg_temp.expect_write('posts', 'control: A edits own post', 'allowed: 1 rows',

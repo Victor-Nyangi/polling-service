@@ -925,10 +925,19 @@ create policy "posts are public to read"
   for select
   using (true);
 
+-- created_at is the feed's order (the home feed and /u/[username] both sort by
+-- it, newest first) and the date shown on the card, so it is pinned to the
+-- server's now() the same way "users can create reports" pins it: the column
+-- default is now() too, so a post that takes the default passes and a
+-- client-supplied timestamp, say one in 2999 to sit at the top of the feed, is
+-- refused. createPollPostAction never sends created_at.
 create policy "users can create their own posts"
   on public.posts
   for insert
-  with check (auth.uid() = author_id);
+  with check (
+    auth.uid() = author_id
+    and created_at = now()
+  );
 
 create policy "users can update their own posts"
   on public.posts
