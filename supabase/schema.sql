@@ -890,6 +890,13 @@ create policy "staff can read all reports"
 -- on profiles and polls) because an INSERT check sees the whole new row and can
 -- pin these columns to their initial values; an UPDATE check cannot see the old
 -- row, which is why those tables need column grants instead.
+--
+-- created_at is pinned the same way. It is the moderation queue's order, so a
+-- reporter who could set it could backdate a report out of sight or future-date
+-- it to the top. The column default and this check both use now(), which is the
+-- transaction's start time and so the same value within one INSERT: a row that
+-- takes the default passes, and a client-supplied timestamp is refused. If the
+-- default ever moves to clock_timestamp(), change this check with it.
 create policy "users can create reports"
   on public.reports
   for insert
@@ -898,6 +905,7 @@ create policy "users can create reports"
     and status = 'open'
     and reviewed_by is null
     and reviewed_at is null
+    and created_at = now()
   );
 
 create policy "staff can update reports"

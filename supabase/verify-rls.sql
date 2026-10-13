@@ -52,7 +52,10 @@
 -- reports hole (a user could file a report already closed and "reviewed" by
 -- someone else, because "users can create reports" checked only reporter_id);
 -- schema.sql closed it on 2026-10-11 and the same local run gave 139 PASS, the
--- reactions one FAIL. Not yet run against the live database.
+-- reactions one FAIL. On 2026-10-13 a reports check for a client-supplied
+-- created_at was added (it failed, 141 checks, 139 PASS, 2 FAIL) and
+-- schema.sql pinned created_at in "users can create reports": 141 checks,
+-- 140 PASS, the reactions one FAIL. Not yet run against the live database.
 --
 -- FIXTURES. Every fixture id comes from pg_temp.id('<key>') and every invite or
 -- ballot hash from pg_temp.h('<key>'). An unknown key raises instead of
@@ -609,6 +612,9 @@ begin
   perform pg_temp.expect_write('reports', 'A files a report already closed, "reviewed" by B', 'denied: 42501',
     $q$insert into public.reports (reporter_id, target_type, target_post_id, reason, status, reviewed_by, reviewed_at)
        values (pg_temp.id('A'), 'post', pg_temp.id('B_plain_post'), 'pre-closed', 'closed', pg_temp.id('B'), now())$q$);
+  perform pg_temp.expect_write('reports', 'A files a report with its own created_at (backdated)', 'denied: 42501',
+    $q$insert into public.reports (reporter_id, target_type, target_post_id, reason, created_at)
+       values (pg_temp.id('A'), 'post', pg_temp.id('B_plain_post'), 'backdated', '2000-01-01 00:00:00+00')$q$);
   perform pg_temp.expect_write('reports', 'control: A files a report', 'allowed: 1 rows',
     $q$insert into public.reports (reporter_id, target_type, target_post_id, reason)
        values (pg_temp.id('A'), 'post', pg_temp.id('B_plain_post'), 'verify-rls')$q$);
