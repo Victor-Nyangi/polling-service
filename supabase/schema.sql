@@ -908,9 +908,24 @@ create policy "users can create reports"
     and created_at = now()
   );
 
+-- Staff moderate a report through reviewReportAction, which writes status,
+-- reviewed_by (the moderator's own id) and reviewed_at, and nothing else. The
+-- report itself (who filed it, why, when, and against what) is the reporter's
+-- and stays as filed.
+--
+-- The policy is row-level and Supabase's table-wide UPDATE grant covers every
+-- column, so on its own it let staff rewrite a report's reporter_id, reason,
+-- created_at or target. Revoke the table-wide grant and hand back only the
+-- three moderation columns, the same pattern as profiles and polls. The WITH
+-- CHECK pins reviewed_by to the moderator making the change, so a review can't
+-- be recorded under another user's name (notify_report_reviewed names
+-- reviewed_by as the actor on the reporter's notification). reviewed_at is set
+-- from the app server's clock, not the database's, so it is not pinned to
+-- now() here.
 create policy "staff can update reports"
   on public.reports
   for update
+  to authenticated
   using (
     exists (
       select 1
@@ -918,7 +933,19 @@ create policy "staff can update reports"
       where user_id = auth.uid()
         and role in ('moderator', 'admin')
     )
+  )
+  with check (
+    reviewed_by = auth.uid()
+    and exists (
+      select 1
+      from public.profiles
+      where user_id = auth.uid()
+        and role in ('moderator', 'admin')
+    )
   );
+
+revoke update on public.reports from anon, authenticated;
+grant update (status, reviewed_by, reviewed_at) on public.reports to authenticated;
 
 create policy "posts are public to read"
   on public.posts

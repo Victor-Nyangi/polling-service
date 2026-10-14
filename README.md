@@ -98,8 +98,8 @@ selects `profiles.onboarded_at`, which does not exist until step 1.
    `verify.sql: all assertions passed`. This exercises the signup trigger, the
    notification triggers, and the column-level privileges; everything it creates
    is rolled back.
-   Then run `supabase/verify-rls.sql`. It signs in as two throwaway users and
-   as anon, tries to read and change the other user's rows in every user-owned
+   Then run `supabase/verify-rls.sql`. It signs in as two throwaway users, a
+   throwaway moderator, and as anon, tries to read and change the other user's rows in every user-owned
    table, and shows one row per check with PASS or FAIL. It also ends in
    `rollback`. Any FAIL that isn't in the file's "known fails" header is a
    regression.
@@ -165,13 +165,15 @@ notification triggers, and session persistence are all working together.
 - **Schema changes**: edit `supabase/schema.sql`, re-run it in the SQL editor,
   then re-run `supabase/verify.sql` and `supabase/verify-rls.sql`. There is no
   migration tool — keep every statement re-runnable.
-- **Pending re-paste (2026-10-11, extended 2026-10-13)**: "users can create
-  reports" now requires a new report to be `open` with no reviewer, and both it
-  and "users can create their own posts" require `created_at` to be the
-  server's `now()` (a client-supplied timestamp is refused). Posts also lost
+- **Pending re-paste (2026-10-11, extended 2026-10-13 and 2026-10-14)**: "users
+  can create reports" now requires a new report to be `open` with no reviewer,
+  and both it and "users can create their own posts" require `created_at` to be
+  the server's `now()` (a client-supplied timestamp is refused). Posts also lost
   their UPDATE grant: the app has no post editing, so no column is granted back.
+  Staff can now update only a report's `status`, `reviewed_by` and
+  `reviewed_at`, and `reviewed_by` must be the moderator making the change.
   The owner must re-paste `schema.sql` into the live database, then re-run both
-  verify files (expect 143 checks, 142 PASS, 1 FAIL: reactions).
+  verify files (expect 151 checks, 150 PASS, 1 FAIL: reactions).
 - **Preview deployments**: Vercel builds every pull request. They share the
   production database unless you point Preview at a separate Supabase project.
 - **Environments**: keep `development` and `production` only. Add staging when
