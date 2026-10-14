@@ -31,6 +31,7 @@ import {
 import { buildNoticeHref } from "@/lib/notice";
 import { isPollClosed } from "@/lib/poll-status";
 import { safeRedirectPath } from "@/lib/redirect";
+import { isStaffRole } from "@/lib/roles";
 import { createClient } from "@/lib/supabase/server";
 import {
   THEME_COOKIE,
@@ -872,17 +873,49 @@ export async function reviewReportAction(formData: FormData) {
   }
 
   const { supabase, user } = await requireAuthenticatedUser(redirectTo);
-  const { error } = await supabase
+
+  // RLS ("staff can update reports") is the guarantee, but it refuses a
+  // non-staff caller by filtering the update to zero rows, not with an error,
+  // so without these checks the action would report success for a write that
+  // never happened.
+  const { data: profile, error: profileError } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (profileError) {
+    await redirectWithNotice(redirectTo, "error", profileError.message);
+  }
+
+  if (!isStaffRole(profile?.role)) {
+    await redirectWithNotice(
+      redirectTo,
+      "error",
+      "Only moderators and admins can review reports.",
+    );
+  }
+
+  const { data: updated, error } = await supabase
     .from("reports")
     .update({
       status,
       reviewed_by: user.id,
       reviewed_at: new Date().toISOString(),
     })
-    .eq("id", reportId);
+    .eq("id", reportId)
+    .select("id");
 
   if (error) {
     await redirectWithNotice(redirectTo, "error", error.message);
+  }
+
+  if (!updated || updated.length === 0) {
+    await redirectWithNotice(
+      redirectTo,
+      "error",
+      "Report not found or you can't review it.",
+    );
   }
 
   revalidatePath("/moderation");
