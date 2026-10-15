@@ -213,6 +213,35 @@ create table if not exists public.notifications (
   created_at timestamptz not null default now()
 );
 
+-- Table privileges, stated outright rather than inherited.
+--
+-- Until now this file relied on Supabase's legacy default privileges, which
+-- granted every new table in `public` to anon, authenticated and service_role
+-- automatically. New Supabase projects, and the CLI's local stacks, no longer
+-- do that (`auto_expose_new_tables`, removed from the CLI on 2026-10-30), and
+-- on such a database this file applied cleanly but every API request was then
+-- refused with 42501. These grants reproduce exactly what the legacy defaults
+-- gave: select, insert, update and delete. (truncate, references, trigger and
+-- maintain are still default-granted either way and are left alone.)
+--
+-- They are the wide starting point, not the policy. The revokes and column
+-- grants further down narrow them, and RLS still decides rows, so the end
+-- state is the same as before. That only holds while these come BEFORE every
+-- revoke on the same table: re-running the file re-grants here, then narrows
+-- again below. Add any new table to this list.
+grant select, insert, update, delete on table
+  public.profiles,
+  public.posts,
+  public.polls,
+  public.poll_options,
+  public.poll_votes,
+  public.poll_participants,
+  public.reactions,
+  public.reposts,
+  public.reports,
+  public.notifications
+  to anon, authenticated, service_role;
+
 create index if not exists posts_author_id_created_at_idx
   on public.posts (author_id, created_at desc);
 
@@ -276,7 +305,12 @@ from public.poll_options as po
 left join public.poll_votes as pv on pv.option_id = po.id
 group by po.poll_id, po.id;
 
-grant select on public.poll_option_vote_counts to anon, authenticated;
+-- What the legacy default privileges gave this view, stated outright (see the
+-- table grants above). Only select matters: the view aggregates, so Postgres
+-- refuses insert, update and delete through it whatever the grant says. It is
+-- dropped and recreated on every run, so this runs on every run too.
+grant select, insert, update, delete on public.poll_option_vote_counts
+  to anon, authenticated, service_role;
 
 alter table public.posts drop constraint if exists posts_body_or_image_check;
 
@@ -752,6 +786,26 @@ after update on public.reports
 for each row
 execute function public.notify_report_reviewed();
 
+-- Function privileges, stated outright for the same reason as the table
+-- grants: the legacy default privileges gave every new function in `public`
+-- execute to anon, authenticated and service_role, and new projects do not.
+-- (On those, `public` functions are not even executable by PUBLIC.) These are
+-- trigger functions, which Postgres refuses to call outside a trigger, so the
+-- grant changes nothing anyone can do; it keeps the privileges identical to
+-- the database this file was written against. The three later functions get
+-- theirs next to their definitions, ahead of their own revokes.
+grant execute on function
+  public.set_updated_at(),
+  public.handle_new_user(),
+  public.enforce_poll_accepts_votes(),
+  public.enforce_participation_mode_frozen(),
+  public.notify_poll_vote(),
+  public.notify_poll_responses(),
+  public.notify_post_reaction(),
+  public.notify_post_repost(),
+  public.notify_report_reviewed()
+  to anon, authenticated, service_role;
+
 do $$
 begin
   if not exists (
@@ -1164,6 +1218,11 @@ begin
 end;
 $$;
 
+-- The legacy default privileges, stated outright (see the function grants
+-- above the notification triggers).
+grant execute on function public.prevent_used_invite_deletion()
+  to anon, authenticated, service_role;
+
 drop trigger if exists keep_used_invites on public.poll_participants;
 create trigger keep_used_invites
 before delete on public.poll_participants
@@ -1295,6 +1354,11 @@ begin
 end;
 $$;
 
+-- The legacy default grant first, then the narrowing below it. service_role
+-- keeps execute, as it always has; revoking from public does not reach a role
+-- granted by name.
+grant execute on function public.cast_anonymous_vote(uuid, uuid, text)
+  to anon, authenticated, service_role;
 revoke all on function public.cast_anonymous_vote(uuid, uuid, text) from public;
 grant execute on function public.cast_anonymous_vote(uuid, uuid, text)
   to anon, authenticated;
@@ -1390,8 +1454,12 @@ begin
 end;
 $$;
 
--- Supabase's default privileges grant execute on every new public function to
--- anon by name, so revoking from public alone would leave anon holding it.
+-- Supabase's legacy default privileges granted execute on every new public
+-- function to anon by name, so revoking from public alone would leave anon
+-- holding it. That grant is now explicit, here, so the revoke below has the
+-- same thing to take away on every database.
+grant execute on function public.issue_poll_invites(uuid, text[])
+  to anon, authenticated, service_role;
 revoke all on function public.issue_poll_invites(uuid, text[]) from public, anon;
 grant execute on function public.issue_poll_invites(uuid, text[]) to authenticated;
 

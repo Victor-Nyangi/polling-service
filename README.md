@@ -165,13 +165,21 @@ notification triggers, and session persistence are all working together.
 - **Schema changes**: edit `supabase/schema.sql`, re-run it in the SQL editor,
   then re-run `supabase/verify.sql` and `supabase/verify-rls.sql`. There is no
   migration tool — keep every statement re-runnable.
-- **Pending re-paste (2026-10-11, extended 2026-10-13 and 2026-10-14)**: "users
+- **Pending re-paste (2026-10-11, extended 2026-10-13, 2026-10-14 and 2026-10-15)**: "users
   can create reports" now requires a new report to be `open` with no reviewer,
   and both it and "users can create their own posts" require `created_at` to be
   the server's `now()` (a client-supplied timestamp is refused). Posts also lost
   their UPDATE grant: the app has no post editing, so no column is granted back.
   Staff can now update only a report's `status`, `reviewed_by` and
   `reviewed_at`, and `reviewed_by` must be the moderator making the change.
+  `schema.sql` also now states every table and function grant outright
+  (select, insert, update, delete, and execute, to `anon`, `authenticated` and
+  `service_role`) instead of relying on Supabase's legacy default privileges,
+  which new projects no longer apply. **Deadline 2026-10-30**: that is when the
+  Supabase CLI drops `auto_expose_new_tables`, after which a database without
+  these explicit grants refuses every API request with 42501. On the live
+  database the grants change nothing (they reproduce what it already has);
+  they matter for any new project, branch, or local stack.
   The owner must re-paste `schema.sql` into the live database, then re-run both
   verify files (expect 151 checks, 150 PASS, 1 FAIL: reactions).
 - **Preview deployments**: Vercel builds every pull request. They share the
