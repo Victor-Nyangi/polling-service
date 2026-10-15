@@ -2,6 +2,7 @@ import { cookies, headers } from "next/headers";
 import Link from "next/link";
 import { setThemeAction, signOutAction } from "@/app/actions";
 import { NAV_ITEMS, currentNavHref } from "@/lib/nav";
+import { ONBOARDING_REQUIRED_MESSAGE } from "@/lib/onboarding";
 import { safeRedirectPath } from "@/lib/redirect";
 import { isDemoMode } from "@/lib/server/platform";
 import {
@@ -178,7 +179,7 @@ export async function AppShell({
         ) : null}
         {currentUser?.needsOnboarding ? (
           <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-200">
-            Finish profile setup in the onboarding flow before creating content.
+            {ONBOARDING_REQUIRED_MESSAGE}
           </div>
         ) : null}
         {children}

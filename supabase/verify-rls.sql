@@ -6,12 +6,13 @@
 -- (signed-in votes and anonymous participant_hash ballots), poll_participants
 -- (invites), reactions, reposts, reports, notifications, plus the two RPCs that
 -- bypass RLS on purpose (issue_poll_invites, cast_anonymous_vote) and the
--- public tally view. Positive controls check that A CAN still do what the
--- policies intend on A's own rows, so a database that refused everything would
--- not pass.
+-- public tally view. A third user, S, is a moderator, to check what staff can
+-- and cannot change on a report. Positive controls check that A (and S) CAN
+-- still do what the policies intend, so a database that refused everything
+-- would not pass.
 --
 -- IT LEAVES NOTHING BEHIND. The whole script is one transaction that always
--- ends in ROLLBACK: the two throwaway users, their profiles, every fixture row
+-- ends in ROLLBACK: the three throwaway users, their profiles, every fixture row
 -- and the temp table holding the results are all discarded. On top of that,
 -- every individual probe runs in its own subtransaction and is rolled back
 -- straight after its outcome is recorded, so one probe can never change what
@@ -52,12 +53,28 @@
 -- reports hole (a user could file a report already closed and "reviewed" by
 -- someone else, because "users can create reports" checked only reporter_id);
 -- schema.sql closed it on 2026-10-11 and the same local run gave 139 PASS, the
--- reactions one FAIL. Not yet run against the live database.
+-- reactions one FAIL. On 2026-10-13 a reports check for a client-supplied
+-- created_at was added (it failed, 141 checks, 139 PASS, 2 FAIL) and
+-- schema.sql pinned created_at in "users can create reports": 141 checks,
+-- 140 PASS, the reactions one FAIL. The same was then done for posts (a
+-- future-dated post would sit at the top of the feed): 142 checks, 141 PASS,
+-- the reactions one FAIL. Then posts lost its UPDATE grant (the app never
+-- edits a post, and an author could otherwise move created_at by UPDATE): the
+-- "A edits own post" control became a denial, a created_at UPDATE check was
+-- added, and the run gave 143 checks, 142 PASS, the reactions one FAIL. On
+-- 2026-10-14 the moderator S and eight checks were added; five of them failed
+-- (151 checks, 145 PASS, 6 FAIL) because "staff can update reports" had no WITH
+-- CHECK and rode on the table-wide UPDATE grant, so staff could rewrite a
+-- report's reporter, reason, created_at or target, or record a review under
+-- someone else's name. schema.sql then limited staff to status, reviewed_by and
+-- reviewed_at, with reviewed_by pinned to the moderator: 151 checks, 150 PASS,
+-- the reactions one FAIL. Not yet run against the live database.
 --
 -- FIXTURES. Every fixture id comes from pg_temp.id('<key>') and every invite or
 -- ballot hash from pg_temp.h('<key>'). An unknown key raises instead of
 -- quietly matching nothing, so a typo cannot turn a check into a false
--- "denied: 0 rows". Keys: A, B (the users), and for each user X:
+-- "denied: 0 rows". Keys: A, B (the users), S (a moderator, with no fixture
+-- rows of its own), and for each of A and B as X:
 --   X_post, X_poll, X_opt1, X_opt2   a post with an open poll and two options
 --   X_vote      X's signed-in vote on the OTHER user's open poll
 --   X_ballot    an anonymous (participant_hash) ballot on X's own open poll
@@ -104,6 +121,7 @@ begin
   v_prefix := case split_part(p_key, '_', 1)
     when 'A' then 'aaaaaaaa'
     when 'B' then 'bbbbbbbb'
+    when 'S' then 'cccccccc'
   end;
 
   v_suffix := case substr(p_key, 3)
@@ -169,6 +187,7 @@ begin
       case auth.uid()
         when pg_temp.id('A') then 'A'
         when pg_temp.id('B') then 'B'
+        when pg_temp.id('S') then 'S'
         else 'authenticated (no sub)'
       end
     else 'owner'
@@ -292,7 +311,14 @@ insert into auth.users (
    now(), now(), '{}'::jsonb, jsonb_build_object('display_name', 'RLS User A')),
   (pg_temp.id('B'), '00000000-0000-0000-0000-000000000000',
    'authenticated', 'authenticated', 'rls_b@example.test', '',
-   now(), now(), '{}'::jsonb, jsonb_build_object('display_name', 'RLS User B'));
+   now(), now(), '{}'::jsonb, jsonb_build_object('display_name', 'RLS User B')),
+  (pg_temp.id('S'), '00000000-0000-0000-0000-000000000000',
+   'authenticated', 'authenticated', 'rls_s@example.test', '',
+   now(), now(), '{}'::jsonb, jsonb_build_object('display_name', 'RLS Staff S'));
+
+-- S is the moderator. Only the owner can set role (it is outside the profiles
+-- UPDATE grant), which is how a real moderator gets promoted too.
+update public.profiles set role = 'moderator' where user_id = pg_temp.id('S');
 
 insert into public.posts (id, author_id, body) values
   (pg_temp.id('A_post'), pg_temp.id('A'), 'verify-rls: A post with an open poll'),
@@ -369,6 +395,8 @@ do $$
 begin
   perform pg_temp.expect_read('setup', 'trigger created both profiles', 'allowed: 2 visible',
     $q$select 1 from public.profiles where user_id in (pg_temp.id('A'), pg_temp.id('B'))$q$);
+  perform pg_temp.expect_read('setup', 'S is a moderator', 'allowed: 1 visible',
+    $q$select 1 from public.profiles where user_id = pg_temp.id('S') and role = 'moderator'$q$);
   perform pg_temp.expect_read('setup', 'posts', 'allowed: 6 visible',
     $q$select 1 from public.posts where author_id in (pg_temp.id('A'), pg_temp.id('B'))$q$);
   perform pg_temp.expect_read('setup', 'polls', 'allowed: 4 visible',
@@ -447,9 +475,16 @@ begin
     $q$insert into public.posts (author_id, body) values (pg_temp.id('B'), 'forged')$q$);
   perform pg_temp.expect_write('posts', 'A hands own post to B', 'denied: 42501',
     $q$update public.posts set author_id = pg_temp.id('B') where id = pg_temp.id('A_plain_post')$q$);
+  perform pg_temp.expect_write('posts', 'A creates a post with its own created_at (future-dated)', 'denied: 42501',
+    $q$insert into public.posts (author_id, body, created_at) values (pg_temp.id('A'), 'pinned', '2999-01-01 00:00:00+00')$q$);
   perform pg_temp.expect_write('posts', 'control: A creates a post', 'allowed: 1 rows',
     $q$insert into public.posts (author_id, body) values (pg_temp.id('A'), 'verify-rls new post')$q$);
-  perform pg_temp.expect_write('posts', 'control: A edits own post', 'allowed: 1 rows',
+  -- The app has no post editing, so posts has no UPDATE grant at all: even the
+  -- author's own row refuses every column. If an edit feature grants a column
+  -- back, turn the matching check below into an 'allowed: 1 rows' control.
+  perform pg_temp.expect_write('posts', 'A moves own post''s created_at (future-dated)', 'denied: 42501',
+    $q$update public.posts set created_at = '2999-01-01 00:00:00+00' where id = pg_temp.id('A_plain_post')$q$);
+  perform pg_temp.expect_write('posts', 'A edits own post body (no edit feature)', 'denied: 42501',
     $q$update public.posts set body = 'edited' where id = pg_temp.id('A_plain_post')$q$);
   perform pg_temp.expect_write('posts', 'control: A deletes own post', 'allowed: 1 rows',
     $q$delete from public.posts where id = pg_temp.id('A_plain_post')$q$);
@@ -599,6 +634,9 @@ begin
     $q$select 1 from public.reports where id = pg_temp.id('B_report')$q$);
   perform pg_temp.expect_write('reports', 'A closes B''s report', 'denied: 0 rows',
     $q$update public.reports set status = 'closed' where id = pg_temp.id('B_report')$q$);
+  perform pg_temp.expect_write('reports', 'A reviews B''s report the way reviewReportAction does (not staff)', 'denied: 0 rows',
+    $q$update public.reports set status = 'reviewed', reviewed_by = pg_temp.id('A'), reviewed_at = now()
+       where id = pg_temp.id('B_report')$q$);
   perform pg_temp.expect_write('reports', 'A deletes B''s report', 'denied: 0 rows',
     $q$delete from public.reports where id = pg_temp.id('B_report')$q$);
   perform pg_temp.expect_write('reports', 'A files a report as B', 'denied: 42501',
@@ -609,6 +647,9 @@ begin
   perform pg_temp.expect_write('reports', 'A files a report already closed, "reviewed" by B', 'denied: 42501',
     $q$insert into public.reports (reporter_id, target_type, target_post_id, reason, status, reviewed_by, reviewed_at)
        values (pg_temp.id('A'), 'post', pg_temp.id('B_plain_post'), 'pre-closed', 'closed', pg_temp.id('B'), now())$q$);
+  perform pg_temp.expect_write('reports', 'A files a report with its own created_at (backdated)', 'denied: 42501',
+    $q$insert into public.reports (reporter_id, target_type, target_post_id, reason, created_at)
+       values (pg_temp.id('A'), 'post', pg_temp.id('B_plain_post'), 'backdated', '2000-01-01 00:00:00+00')$q$);
   perform pg_temp.expect_write('reports', 'control: A files a report', 'allowed: 1 rows',
     $q$insert into public.reports (reporter_id, target_type, target_post_id, reason)
        values (pg_temp.id('A'), 'post', pg_temp.id('B_plain_post'), 'verify-rls')$q$);
@@ -638,6 +679,36 @@ begin
   -- Tallies are public; they are counts, never ballots.
   perform pg_temp.expect_read('poll_option_vote_counts', 'control: A reads B''s poll tallies', 'allowed: 2 visible',
     $q$select 1 from public.poll_option_vote_counts where poll_id = pg_temp.id('B_poll')$q$);
+end
+$$;
+
+------------------------------------------------------------------------------
+-- As staff user S (a moderator). Staff moderate through reviewReportAction,
+-- which writes status, reviewed_by and reviewed_at and nothing else.
+------------------------------------------------------------------------------
+
+select set_config('request.jwt.claims',
+         json_build_object('sub', pg_temp.id('S'), 'role', 'authenticated')::text, true),
+       set_config('request.jwt.claim.sub', pg_temp.id('S')::text, true);
+
+do $$
+begin
+  -- reports: staff review a report as themselves; the report itself is the
+  -- reporter's and stays as filed. B_report is B's report of A_post.
+  perform pg_temp.expect_write('reports', 'control: S reviews B''s report the way reviewReportAction does', 'allowed: 1 rows',
+    $q$update public.reports set status = 'reviewed', reviewed_by = pg_temp.id('S'), reviewed_at = now()
+       where id = pg_temp.id('B_report')$q$);
+  perform pg_temp.expect_write('reports', 'S records the review as B''s (reviewed_by)', 'denied: 42501',
+    $q$update public.reports set status = 'closed', reviewed_by = pg_temp.id('B'), reviewed_at = now()
+       where id = pg_temp.id('B_report')$q$);
+  perform pg_temp.expect_write('reports', 'S changes the reporter of B''s report', 'denied: 42501',
+    $q$update public.reports set reporter_id = pg_temp.id('A') where id = pg_temp.id('B_report')$q$);
+  perform pg_temp.expect_write('reports', 'S rewrites the reason on B''s report', 'denied: 42501',
+    $q$update public.reports set reason = 'rewritten' where id = pg_temp.id('B_report')$q$);
+  perform pg_temp.expect_write('reports', 'S moves B''s report''s created_at (backdated)', 'denied: 42501',
+    $q$update public.reports set created_at = '2000-01-01 00:00:00+00' where id = pg_temp.id('B_report')$q$);
+  perform pg_temp.expect_write('reports', 'S retargets B''s report to another post', 'denied: 42501',
+    $q$update public.reports set target_post_id = pg_temp.id('B_plain_post') where id = pg_temp.id('B_report')$q$);
 end
 $$;
 

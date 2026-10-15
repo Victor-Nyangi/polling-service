@@ -29,8 +29,10 @@ import {
   withoutInviteParam,
 } from "@/lib/invite";
 import { buildNoticeHref } from "@/lib/notice";
+import { ONBOARDING_REQUIRED_MESSAGE, needsOnboarding } from "@/lib/onboarding";
 import { isPollClosed } from "@/lib/poll-status";
 import { safeRedirectPath } from "@/lib/redirect";
+import { isStaffRole } from "@/lib/roles";
 import { createClient } from "@/lib/supabase/server";
 import {
   THEME_COOKIE,
@@ -93,6 +95,43 @@ async function requireAuthenticatedUser(redirectTo: string) {
   }
 
   return { supabase, user };
+}
+
+type OnboardingCheck = "onboarded" | "needs-onboarding" | "failed";
+
+/**
+ * The server half of the "finish profile setup" banner, decided by the same
+ * `needsOnboarding()` the banner uses. Content-creating actions call it after
+ * `requireAuthenticatedUser()`, because the banner alone is advice: before
+ * this, an account that skipped onboarding could still publish polls and issue
+ * invites. A failed profile read is reported as such rather than guessed at,
+ * and the caller refuses either way.
+ */
+async function checkOnboarding(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+): Promise<OnboardingCheck> {
+  const { data: profile, error } = await supabase
+    .from("profiles")
+    .select("onboarded_at")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error) {
+    return "failed";
+  }
+
+  return needsOnboarding(profile) ? "needs-onboarding" : "onboarded";
+}
+
+const PROFILE_CHECK_FAILED_MESSAGE = "We couldn't check your profile. Try again.";
+
+function onboardingRefusal(check: OnboardingCheck): string | null {
+  if (check === "onboarded") {
+    return null;
+  }
+
+  return check === "failed" ? PROFILE_CHECK_FAILED_MESSAGE : ONBOARDING_REQUIRED_MESSAGE;
 }
 
 async function appOrigin() {
@@ -295,6 +334,12 @@ export async function createPollPostAction(formData: FormData) {
   }
 
   const { supabase, user } = await requireAuthenticatedUser(redirectTo);
+  const onboardingError = onboardingRefusal(await checkOnboarding(supabase, user.id));
+
+  if (onboardingError) {
+    await redirectWithNotice(redirectTo, "error", onboardingError);
+  }
+
   const { data: post, error: postError } = await supabase
     .from("posts")
     .insert({
@@ -659,7 +704,12 @@ export async function issuePollInvitesAction(
     return { status: "error", message: parsed.message };
   }
 
-  const { supabase } = await requireAuthenticatedUser(redirectTo);
+  const { supabase, user } = await requireAuthenticatedUser(redirectTo);
+  const onboardingError = onboardingRefusal(await checkOnboarding(supabase, user.id));
+
+  if (onboardingError) {
+    return { status: "error", message: onboardingError };
+  }
 
   // The links name the post, not the poll, and the post comes from the
   // database rather than the form, so a link always opens the poll it votes on.
@@ -872,17 +922,49 @@ export async function reviewReportAction(formData: FormData) {
   }
 
   const { supabase, user } = await requireAuthenticatedUser(redirectTo);
-  const { error } = await supabase
+
+  // RLS ("staff can update reports") is the guarantee, but it refuses a
+  // non-staff caller by filtering the update to zero rows, not with an error,
+  // so without these checks the action would report success for a write that
+  // never happened.
+  const { data: profile, error: profileError } = await supabase
+    .from("profiles")
+    .select("role")
+    .eq("user_id", user.id)
+    .maybeSingle();
+
+  if (profileError) {
+    await redirectWithNotice(redirectTo, "error", profileError.message);
+  }
+
+  if (!isStaffRole(profile?.role)) {
+    await redirectWithNotice(
+      redirectTo,
+      "error",
+      "Only moderators and admins can review reports.",
+    );
+  }
+
+  const { data: updated, error } = await supabase
     .from("reports")
     .update({
       status,
       reviewed_by: user.id,
       reviewed_at: new Date().toISOString(),
     })
-    .eq("id", reportId);
+    .eq("id", reportId)
+    .select("id");
 
   if (error) {
     await redirectWithNotice(redirectTo, "error", error.message);
+  }
+
+  if (!updated || updated.length === 0) {
+    await redirectWithNotice(
+      redirectTo,
+      "error",
+      "Report not found or you can't review it.",
+    );
   }
 
   revalidatePath("/moderation");

@@ -8,6 +8,7 @@ import {
   participationModeOf,
 } from "@/lib/anonymous-vote";
 import { hasSupabasePublicEnv } from "@/lib/env";
+import { needsOnboarding } from "@/lib/onboarding";
 import {
   demoCurrentUser,
   demoFeedPosts,
@@ -17,6 +18,7 @@ import {
 } from "@/lib/demo-data";
 import { embeddedRows, firstEmbedded } from "@/lib/embeds";
 import { renderNotification } from "@/lib/notifications";
+import { isStaffRole } from "@/lib/roles";
 import { createClient } from "@/lib/supabase/server";
 import { validateUsername } from "@/lib/username";
 import type {
@@ -277,7 +279,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
       profile?.role === "moderator" || profile?.role === "admin"
         ? profile.role
         : "user",
-    needsOnboarding: !profile?.onboarded_at,
+    needsOnboarding: needsOnboarding(profile),
   };
 }
 
@@ -563,7 +565,7 @@ export async function getModerationReports(): Promise<Loaded<ModerationReport[]>
   // user is ambiguous (signed out, or the request failed), so let the query
   // run and report a genuine failure. The "staff can read all reports" policy
   // is the authoritative check either way.
-  if (currentUser && currentUser.role !== "moderator" && currentUser.role !== "admin") {
+  if (currentUser && !isStaffRole(currentUser.role)) {
     return { data: [], failed: false };
   }
 

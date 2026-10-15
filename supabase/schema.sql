@@ -213,6 +213,35 @@ create table if not exists public.notifications (
   created_at timestamptz not null default now()
 );
 
+-- Table privileges, stated outright rather than inherited.
+--
+-- Until now this file relied on Supabase's legacy default privileges, which
+-- granted every new table in `public` to anon, authenticated and service_role
+-- automatically. New Supabase projects, and the CLI's local stacks, no longer
+-- do that (`auto_expose_new_tables`, removed from the CLI on 2026-10-30), and
+-- on such a database this file applied cleanly but every API request was then
+-- refused with 42501. These grants reproduce exactly what the legacy defaults
+-- gave: select, insert, update and delete. (truncate, references, trigger and
+-- maintain are still default-granted either way and are left alone.)
+--
+-- They are the wide starting point, not the policy. The revokes and column
+-- grants further down narrow them, and RLS still decides rows, so the end
+-- state is the same as before. That only holds while these come BEFORE every
+-- revoke on the same table: re-running the file re-grants here, then narrows
+-- again below. Add any new table to this list.
+grant select, insert, update, delete on table
+  public.profiles,
+  public.posts,
+  public.polls,
+  public.poll_options,
+  public.poll_votes,
+  public.poll_participants,
+  public.reactions,
+  public.reposts,
+  public.reports,
+  public.notifications
+  to anon, authenticated, service_role;
+
 create index if not exists posts_author_id_created_at_idx
   on public.posts (author_id, created_at desc);
 
@@ -276,7 +305,12 @@ from public.poll_options as po
 left join public.poll_votes as pv on pv.option_id = po.id
 group by po.poll_id, po.id;
 
-grant select on public.poll_option_vote_counts to anon, authenticated;
+-- What the legacy default privileges gave this view, stated outright (see the
+-- table grants above). Only select matters: the view aggregates, so Postgres
+-- refuses insert, update and delete through it whatever the grant says. It is
+-- dropped and recreated on every run, so this runs on every run too.
+grant select, insert, update, delete on public.poll_option_vote_counts
+  to anon, authenticated, service_role;
 
 alter table public.posts drop constraint if exists posts_body_or_image_check;
 
@@ -752,6 +786,26 @@ after update on public.reports
 for each row
 execute function public.notify_report_reviewed();
 
+-- Function privileges, stated outright for the same reason as the table
+-- grants: the legacy default privileges gave every new function in `public`
+-- execute to anon, authenticated and service_role, and new projects do not.
+-- (On those, `public` functions are not even executable by PUBLIC.) These are
+-- trigger functions, which Postgres refuses to call outside a trigger, so the
+-- grant changes nothing anyone can do; it keeps the privileges identical to
+-- the database this file was written against. The three later functions get
+-- theirs next to their definitions, ahead of their own revokes.
+grant execute on function
+  public.set_updated_at(),
+  public.handle_new_user(),
+  public.enforce_poll_accepts_votes(),
+  public.enforce_participation_mode_frozen(),
+  public.notify_poll_vote(),
+  public.notify_poll_responses(),
+  public.notify_post_reaction(),
+  public.notify_post_repost(),
+  public.notify_report_reviewed()
+  to anon, authenticated, service_role;
+
 do $$
 begin
   if not exists (
@@ -890,6 +944,13 @@ create policy "staff can read all reports"
 -- on profiles and polls) because an INSERT check sees the whole new row and can
 -- pin these columns to their initial values; an UPDATE check cannot see the old
 -- row, which is why those tables need column grants instead.
+--
+-- created_at is pinned the same way. It is the moderation queue's order, so a
+-- reporter who could set it could backdate a report out of sight or future-date
+-- it to the top. The column default and this check both use now(), which is the
+-- transaction's start time and so the same value within one INSERT: a row that
+-- takes the default passes, and a client-supplied timestamp is refused. If the
+-- default ever moves to clock_timestamp(), change this check with it.
 create policy "users can create reports"
   on public.reports
   for insert
@@ -898,11 +959,27 @@ create policy "users can create reports"
     and status = 'open'
     and reviewed_by is null
     and reviewed_at is null
+    and created_at = now()
   );
 
+-- Staff moderate a report through reviewReportAction, which writes status,
+-- reviewed_by (the moderator's own id) and reviewed_at, and nothing else. The
+-- report itself (who filed it, why, when, and against what) is the reporter's
+-- and stays as filed.
+--
+-- The policy is row-level and Supabase's table-wide UPDATE grant covers every
+-- column, so on its own it let staff rewrite a report's reporter_id, reason,
+-- created_at or target. Revoke the table-wide grant and hand back only the
+-- three moderation columns, the same pattern as profiles and polls. The WITH
+-- CHECK pins reviewed_by to the moderator making the change, so a review can't
+-- be recorded under another user's name (notify_report_reviewed names
+-- reviewed_by as the actor on the reporter's notification). reviewed_at is set
+-- from the app server's clock, not the database's, so it is not pinned to
+-- now() here.
 create policy "staff can update reports"
   on public.reports
   for update
+  to authenticated
   using (
     exists (
       select 1
@@ -910,23 +987,54 @@ create policy "staff can update reports"
       where user_id = auth.uid()
         and role in ('moderator', 'admin')
     )
+  )
+  with check (
+    reviewed_by = auth.uid()
+    and exists (
+      select 1
+      from public.profiles
+      where user_id = auth.uid()
+        and role in ('moderator', 'admin')
+    )
   );
+
+revoke update on public.reports from anon, authenticated;
+grant update (status, reviewed_by, reviewed_at) on public.reports to authenticated;
 
 create policy "posts are public to read"
   on public.posts
   for select
   using (true);
 
+-- created_at is the feed's order (the home feed and /u/[username] both sort by
+-- it, newest first) and the date shown on the card, so it is pinned to the
+-- server's now() the same way "users can create reports" pins it: the column
+-- default is now() too, so a post that takes the default passes and a
+-- client-supplied timestamp, say one in 2999 to sit at the top of the feed, is
+-- refused. createPollPostAction never sends created_at.
 create policy "users can create their own posts"
   on public.posts
   for insert
-  with check (auth.uid() = author_id);
+  with check (
+    auth.uid() = author_id
+    and created_at = now()
+  );
 
 create policy "users can update their own posts"
   on public.posts
   for update
   using (auth.uid() = author_id)
   with check (auth.uid() = author_id);
+
+-- The policy above is row-level and Supabase's table-wide UPDATE grant covers
+-- every column, so on its own it lets an author move their own post's
+-- created_at (to 2999, say, to sit at the top of the feed) after the insert
+-- check above has passed, or rewrite hashtags and the body under votes already
+-- cast. The app has no post editing: nothing in src/ updates posts, and staff
+-- moderate through reports, not by changing posts. So the grant is revoked and
+-- no column is handed back. The policy stays so that a later edit feature only
+-- has to grant its columns back (body, say), never created_at or author_id.
+revoke update on public.posts from anon, authenticated;
 
 create policy "users can delete their own posts"
   on public.posts
@@ -1110,6 +1218,11 @@ begin
 end;
 $$;
 
+-- The legacy default privileges, stated outright (see the function grants
+-- above the notification triggers).
+grant execute on function public.prevent_used_invite_deletion()
+  to anon, authenticated, service_role;
+
 drop trigger if exists keep_used_invites on public.poll_participants;
 create trigger keep_used_invites
 before delete on public.poll_participants
@@ -1241,6 +1354,11 @@ begin
 end;
 $$;
 
+-- The legacy default grant first, then the narrowing below it. service_role
+-- keeps execute, as it always has; revoking from public does not reach a role
+-- granted by name.
+grant execute on function public.cast_anonymous_vote(uuid, uuid, text)
+  to anon, authenticated, service_role;
 revoke all on function public.cast_anonymous_vote(uuid, uuid, text) from public;
 grant execute on function public.cast_anonymous_vote(uuid, uuid, text)
   to anon, authenticated;
@@ -1336,8 +1454,12 @@ begin
 end;
 $$;
 
--- Supabase's default privileges grant execute on every new public function to
--- anon by name, so revoking from public alone would leave anon holding it.
+-- Supabase's legacy default privileges granted execute on every new public
+-- function to anon by name, so revoking from public alone would leave anon
+-- holding it. That grant is now explicit, here, so the revoke below has the
+-- same thing to take away on every database.
+grant execute on function public.issue_poll_invites(uuid, text[])
+  to anon, authenticated, service_role;
 revoke all on function public.issue_poll_invites(uuid, text[]) from public, anon;
 grant execute on function public.issue_poll_invites(uuid, text[]) to authenticated;
 
