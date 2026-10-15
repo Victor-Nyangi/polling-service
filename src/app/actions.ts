@@ -29,6 +29,7 @@ import {
   withoutInviteParam,
 } from "@/lib/invite";
 import { buildNoticeHref } from "@/lib/notice";
+import { ONBOARDING_REQUIRED_MESSAGE, needsOnboarding } from "@/lib/onboarding";
 import { isPollClosed } from "@/lib/poll-status";
 import { safeRedirectPath } from "@/lib/redirect";
 import { isStaffRole } from "@/lib/roles";
@@ -94,6 +95,43 @@ async function requireAuthenticatedUser(redirectTo: string) {
   }
 
   return { supabase, user };
+}
+
+type OnboardingCheck = "onboarded" | "needs-onboarding" | "failed";
+
+/**
+ * The server half of the "finish profile setup" banner, decided by the same
+ * `needsOnboarding()` the banner uses. Content-creating actions call it after
+ * `requireAuthenticatedUser()`, because the banner alone is advice: before
+ * this, an account that skipped onboarding could still publish polls and issue
+ * invites. A failed profile read is reported as such rather than guessed at,
+ * and the caller refuses either way.
+ */
+async function checkOnboarding(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+): Promise<OnboardingCheck> {
+  const { data: profile, error } = await supabase
+    .from("profiles")
+    .select("onboarded_at")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error) {
+    return "failed";
+  }
+
+  return needsOnboarding(profile) ? "needs-onboarding" : "onboarded";
+}
+
+const PROFILE_CHECK_FAILED_MESSAGE = "We couldn't check your profile. Try again.";
+
+function onboardingRefusal(check: OnboardingCheck): string | null {
+  if (check === "onboarded") {
+    return null;
+  }
+
+  return check === "failed" ? PROFILE_CHECK_FAILED_MESSAGE : ONBOARDING_REQUIRED_MESSAGE;
 }
 
 async function appOrigin() {
@@ -296,6 +334,12 @@ export async function createPollPostAction(formData: FormData) {
   }
 
   const { supabase, user } = await requireAuthenticatedUser(redirectTo);
+  const onboardingError = onboardingRefusal(await checkOnboarding(supabase, user.id));
+
+  if (onboardingError) {
+    await redirectWithNotice(redirectTo, "error", onboardingError);
+  }
+
   const { data: post, error: postError } = await supabase
     .from("posts")
     .insert({
@@ -660,7 +704,12 @@ export async function issuePollInvitesAction(
     return { status: "error", message: parsed.message };
   }
 
-  const { supabase } = await requireAuthenticatedUser(redirectTo);
+  const { supabase, user } = await requireAuthenticatedUser(redirectTo);
+  const onboardingError = onboardingRefusal(await checkOnboarding(supabase, user.id));
+
+  if (onboardingError) {
+    return { status: "error", message: onboardingError };
+  }
 
   // The links name the post, not the poll, and the post comes from the
   // database rather than the form, so a link always opens the poll it votes on.

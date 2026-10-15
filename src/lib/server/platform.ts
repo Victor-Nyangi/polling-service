@@ -8,6 +8,7 @@ import {
   participationModeOf,
 } from "@/lib/anonymous-vote";
 import { hasSupabasePublicEnv } from "@/lib/env";
+import { needsOnboarding } from "@/lib/onboarding";
 import {
   demoCurrentUser,
   demoFeedPosts,
@@ -278,7 +279,7 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
       profile?.role === "moderator" || profile?.role === "admin"
         ? profile.role
         : "user",
-    needsOnboarding: !profile?.onboarded_at,
+    needsOnboarding: needsOnboarding(profile),
   };
 }
 
