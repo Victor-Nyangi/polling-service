@@ -61,7 +61,7 @@ begin
   end if;
 
   ----------------------------------------------------------------------------
-  -- Engagement notifications
+  -- Vote notifications
   ----------------------------------------------------------------------------
   insert into public.posts (author_id, body)
   values (v_author, 'verify post')
@@ -103,30 +103,6 @@ begin
     raise exception 'self-vote should not notify, got % rows', v_count;
   end if;
 
-  -- Reaction notifies once; removing and re-adding does not duplicate.
-  insert into public.reactions (post_id, user_id, reaction_type)
-  values (v_post, v_voter, 'like');
-  delete from public.reactions where post_id = v_post and user_id = v_voter;
-  insert into public.reactions (post_id, user_id, reaction_type)
-  values (v_post, v_voter, 'like');
-
-  select count(*) into v_count from public.notifications
-  where recipient_id = v_author and type = 'post_reaction';
-  if v_count <> 1 then
-    raise exception 'expected dedupe to cap post_reaction at 1, got %', v_count;
-  end if;
-
-  -- Repost notifies once; toggling does not duplicate.
-  insert into public.reposts (post_id, user_id) values (v_post, v_voter);
-  delete from public.reposts where post_id = v_post and user_id = v_voter;
-  insert into public.reposts (post_id, user_id) values (v_post, v_voter);
-
-  select count(*) into v_count from public.notifications
-  where recipient_id = v_author and type = 'post_repost';
-  if v_count <> 1 then
-    raise exception 'expected dedupe to cap post_repost at 1, got %', v_count;
-  end if;
-
   ----------------------------------------------------------------------------
   -- Report review notifications
   ----------------------------------------------------------------------------
@@ -166,6 +142,35 @@ begin
       and indexname = 'notifications_engagement_dedupe_idx'
   ) then
     raise exception 'expected notifications_engagement_dedupe_idx to exist';
+  end if;
+
+  ----------------------------------------------------------------------------
+  -- The social features are gone (removed 2026-10-25)
+  ----------------------------------------------------------------------------
+  if to_regclass('public.reactions') is not null
+     or to_regclass('public.reposts') is not null then
+    raise exception 'expected the reactions and reposts tables to be dropped';
+  end if;
+
+  if to_regprocedure('public.notify_post_reaction()') is not null
+     or to_regprocedure('public.notify_post_repost()') is not null then
+    raise exception 'expected the reaction and repost trigger functions to be dropped';
+  end if;
+
+  if exists (
+    select 1 from pg_indexes
+    where schemaname = 'public'
+      and indexname = 'notifications_engagement_dedupe_idx'
+      and indexdef like '%post_re%'
+  ) then
+    raise exception 'expected notifications_engagement_dedupe_idx narrowed to poll_vote';
+  end if;
+
+  if exists (
+    select 1 from public.notifications
+    where type in ('post_reaction', 'post_repost')
+  ) then
+    raise exception 'expected no post_reaction or post_repost notifications to remain';
   end if;
 
   if exists (

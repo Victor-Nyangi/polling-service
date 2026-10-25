@@ -57,14 +57,14 @@ All four checks run on every pull request via `.github/workflows/ci.yml`.
 ## Initial MVP priorities
 
 1. Authentication and profile onboarding
-2. Poll-post creation and feed
-3. Voting, likes, reposts, and sharing
+2. Poll creation and the list of recent polls
+3. Voting (signed-in, anonymous, and invite-only) and sharing by permalink
 4. Basic moderation and notifications
 5. Deployment hardening and observability
 
 ## Current implemented routes
 
-- `/` — feed, MVP overview, and poll composer
+- `/` — recent polls, MVP overview, and poll composer
 - `/p/[postId]` — public permalink for one poll post (works signed-out); its author also gets the Open / Invite-only switch, invite issuing, and turnout
 - `/p/[postId]?invite=<token>` — an invite link: votes on an invite-only poll, signed in or not, then redirects to the bare permalink
 - `/u/[username]` — public profile and that account's polls (works signed-out)
@@ -165,23 +165,22 @@ notification triggers, and session persistence are all working together.
 - **Schema changes**: edit `supabase/schema.sql`, re-run it in the SQL editor,
   then re-run `supabase/verify.sql` and `supabase/verify-rls.sql`. There is no
   migration tool — keep every statement re-runnable.
-- **Pending re-paste (2026-10-11, extended 2026-10-13, 2026-10-14 and 2026-10-15)**: "users
-  can create reports" now requires a new report to be `open` with no reviewer,
-  and both it and "users can create their own posts" require `created_at` to be
-  the server's `now()` (a client-supplied timestamp is refused). Posts also lost
-  their UPDATE grant: the app has no post editing, so no column is granted back.
-  Staff can now update only a report's `status`, `reviewed_by` and
-  `reviewed_at`, and `reviewed_by` must be the moderator making the change.
-  `schema.sql` also now states every table and function grant outright
-  (select, insert, update, delete, and execute, to `anon`, `authenticated` and
-  `service_role`) instead of relying on Supabase's legacy default privileges,
-  which new projects no longer apply. **Deadline 2026-10-30**: that is when the
-  Supabase CLI drops `auto_expose_new_tables`, after which a database without
-  these explicit grants refuses every API request with 42501. On the live
-  database the grants change nothing (they reproduce what it already has);
-  they matter for any new project, branch, or local stack.
-  The owner must re-paste `schema.sql` into the live database, then re-run both
-  verify files (expect 151 checks, 150 PASS, 1 FAIL: reactions).
+- **Pending re-paste (2026-10-25): the social features are removed, and this
+  deletes data.** Likes/dislikes and reposts are gone from the app, and
+  `schema.sql` now drops the `reactions` and `reposts` tables (with their six
+  RLS policies, two triggers and two indexes), the `notify_post_reaction()` and
+  `notify_post_repost()` trigger functions, and every `post_reaction` /
+  `post_repost` notification, and narrows `notifications_engagement_dedupe_idx`
+  to `poll_vote`. **The first paste on the live database permanently deletes
+  every like, dislike, repost and the notifications they produced**; there is no
+  undo short of a backup. Later pastes do nothing new. Polls, options, ballots,
+  invites, reports, profiles and the other notification types are untouched.
+  After pasting, re-run both verify files: `verify-rls.sql` should give
+  **132 checks, 132 PASS, 0 FAIL** (the reactions FAIL accepted on 2026-10-11
+  is gone with the table). The previous pending changes (2026-10-11 to
+  2026-10-15: report and post `created_at` pinned, posts' UPDATE grant revoked,
+  staff limited to a report's moderation columns, every grant stated outright)
+  were pasted on 2026-10-20, giving 151 checks, 150 PASS, 1 FAIL.
 - **Preview deployments**: Vercel builds every pull request. They share the
   production database unless you point Preview at a separate Supabase project.
 - **Environments**: keep `development` and `production` only. Add staging when

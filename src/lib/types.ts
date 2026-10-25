@@ -61,15 +61,6 @@ export type FeedPost = {
     /** True when the signed-in viewer asked this poll: they get its owner controls. */
     viewerIsAuthor?: boolean;
   };
-  reactions: {
-    likes: number;
-    dislikes: number;
-    viewerReaction?: "like" | "dislike";
-  };
-  reposts: {
-    count: number;
-    viewerHasReposted: boolean;
-  };
 };
 
 /**

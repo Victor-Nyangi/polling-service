@@ -157,7 +157,7 @@ export default async function ProfilePage({
 
       <p className="text-sm text-muted">
         <Link href="/" className="text-accent transition hover:underline">
-          Back to the feed
+          Back to all polls
         </Link>
       </p>
     </AppShell>

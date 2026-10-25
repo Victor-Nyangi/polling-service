@@ -59,37 +59,6 @@ describe("renderNotification", () => {
     }
   });
 
-  it("distinguishes likes from dislikes", () => {
-    expect(
-      renderNotification("post_reaction", {
-        actor_username: "ada",
-        reaction_type: "like",
-      }).body,
-    ).toBe("@ada liked your post.");
-
-    expect(
-      renderNotification("post_reaction", {
-        actor_username: "ada",
-        reaction_type: "dislike",
-      }).body,
-    ).toBe("@ada disliked your post.");
-  });
-
-  it("treats an unknown reaction type as a like", () => {
-    expect(renderNotification("post_reaction", {}).body).toBe(
-      "Someone liked your post.",
-    );
-  });
-
-  it("renders a repost", () => {
-    expect(
-      renderNotification("post_repost", { actor_username: "ada" }),
-    ).toEqual({
-      title: "Your post was reposted",
-      body: "@ada reposted your post.",
-    });
-  });
-
   it("renders a reviewed report, defaulting the status to reviewed", () => {
     expect(renderNotification("report_reviewed", { status: "closed" }).body).toBe(
       "A moderator marked your report as closed.",
@@ -120,7 +89,11 @@ describe("renderNotification", () => {
 
   it("treats an empty actor username as anonymous", () => {
     expect(
-      renderNotification("post_repost", { actor_username: "" }).body,
-    ).toBe("Someone reposted your post.");
+      renderNotification("poll_vote", {
+        actor_username: "",
+        option_label: "Yes",
+        question: "Q?",
+      }).body,
+    ).toBe('Someone voted "Yes" on "Q?".');
   });
 });

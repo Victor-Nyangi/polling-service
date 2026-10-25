@@ -1,10 +1,5 @@
 import Link from "next/link";
-import {
-  createReportAction,
-  setReactionAction,
-  toggleRepostAction,
-  voteOnPollAction,
-} from "@/app/actions";
+import { createReportAction, voteOnPollAction } from "@/app/actions";
 import { INVITE_PARAM, type InviteParam, pollVoteAccess } from "@/lib/invite";
 import { voteCountLabel } from "@/lib/poll-labels";
 import type { FeedPost } from "@/lib/types";
@@ -35,9 +30,10 @@ function inviteOnlyNote(invite: InviteParam, hasVoted: boolean) {
 }
 
 /**
- * `redirectTo` is where the engagement actions send the visitor afterwards, so
- * a vote cast on `/p/[postId]` comes back to that permalink instead of the
- * feed. Every form already carries it; the default keeps the feed unchanged.
+ * `redirectTo` is where the vote and report actions send the visitor
+ * afterwards, so a vote cast on `/p/[postId]` comes back to that permalink
+ * instead of the poll list. Every form already carries it; the default keeps
+ * the poll list unchanged.
  * It never carries an invite token: the permalink page passes the bare path.
  *
  * `invite` is the permalink's `?invite=` param. Only an invite poll uses it:
@@ -164,33 +160,6 @@ export function PollCard({
       </div>
 
       <div className="mt-5 flex flex-wrap gap-3 text-sm">
-        <form action={setReactionAction}>
-          <input type="hidden" name="redirectTo" value={redirectTo} />
-          <input type="hidden" name="postId" value={post.id} />
-          <input type="hidden" name="reactionType" value="like" />
-          <button className="rounded-full border border-border px-4 py-2 transition active:scale-[0.96]">
-            👍 {post.reactions.likes}
-          </button>
-        </form>
-
-        <form action={setReactionAction}>
-          <input type="hidden" name="redirectTo" value={redirectTo} />
-          <input type="hidden" name="postId" value={post.id} />
-          <input type="hidden" name="reactionType" value="dislike" />
-          <button className="rounded-full border border-border px-4 py-2 transition active:scale-[0.96]">
-            👎 {post.reactions.dislikes}
-          </button>
-        </form>
-
-        <form action={toggleRepostAction}>
-          <input type="hidden" name="redirectTo" value={redirectTo} />
-          <input type="hidden" name="postId" value={post.id} />
-          <button className="rounded-full border border-border px-4 py-2 transition active:scale-[0.96]">
-            🔁 {post.reposts.viewerHasReposted ? "Reposted" : "Repost"} ·{" "}
-            {post.reposts.count}
-          </button>
-        </form>
-
         <form action={createReportAction}>
           <input type="hidden" name="redirectTo" value={redirectTo} />
           <input type="hidden" name="targetType" value="post" />
@@ -198,7 +167,7 @@ export function PollCard({
           <input
             type="hidden"
             name="reason"
-            value="Reported from the feed quick-action flow."
+            value="Reported from the poll card quick-action flow."
           />
           <button className="rounded-full border border-border px-4 py-2 transition hover:border-accent/50 active:scale-[0.96]">
             Report

@@ -44,19 +44,6 @@ export function renderNotification(
             : `${count} people have responded to "${question}".`,
       };
     }
-    case "post_reaction": {
-      const verb = payload.reaction_type === "dislike" ? "disliked" : "liked";
-
-      return {
-        title: "New reaction on your post",
-        body: `${actor} ${verb} your post.`,
-      };
-    }
-    case "post_repost":
-      return {
-        title: "Your post was reposted",
-        body: `${actor} reposted your post.`,
-      };
     case "report_reviewed": {
       const status = payload.status === "closed" ? "closed" : "reviewed";
 

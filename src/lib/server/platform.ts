@@ -67,9 +67,7 @@ const POST_SELECT = `
           participation_mode,
           poll_options ( id, label, position ),
           poll_votes ( option_id )
-        ),
-        reactions ( reaction_type, user_id ),
-        reposts ( user_id )
+        )
       `;
 
 function formatProfile(profile: Record<string, unknown> | null | undefined) {
@@ -123,12 +121,9 @@ function mapFeedPost(
 
   const voteRows = embeddedRows(pollRow.poll_votes);
   const optionRows = embeddedRows(pollRow.poll_options);
-  const reactionRows = embeddedRows(row.reactions);
-  const repostRows = embeddedRows(row.reposts);
   // RLS restricts poll_votes to the viewer's own rows, so this is their vote
   // and nobody else's. Tallies come from the aggregate view instead.
   const viewerVote = voteRows[0];
-  const viewerReaction = reactionRows.find((reaction) => reaction.user_id === viewerId);
   const options: PollOption[] = optionRows
     .map((option) => ({
       id: String(option.id),
@@ -177,22 +172,6 @@ function mapFeedPost(
       participationMode,
       viewerIsAnonymous: viewerId === undefined,
       viewerIsAuthor: viewerId !== undefined && viewerId === author.id,
-    },
-    reactions: {
-      likes: reactionRows.filter((reaction) => reaction.reaction_type === "like")
-        .length,
-      dislikes: reactionRows.filter(
-        (reaction) => reaction.reaction_type === "dislike",
-      ).length,
-      viewerReaction:
-        viewerReaction?.reaction_type === "like" ||
-        viewerReaction?.reaction_type === "dislike"
-          ? viewerReaction.reaction_type
-          : undefined,
-    },
-    reposts: {
-      count: repostRows.length,
-      viewerHasReposted: repostRows.some((repost) => repost.user_id === viewerId),
     },
   };
 }
@@ -323,7 +302,7 @@ export async function getFeedPosts(): Promise<Loaded<FeedPost[]>> {
  *
  * Deliberately not gated on a signed-in viewer: the whole point of a permalink
  * is that it works for someone who followed a shared link. RLS makes posts,
- * polls, options, reactions, and reposts publicly readable, and the vote view
+ * polls and options publicly readable, and the vote view
  * is granted to `anon`.
  */
 export async function getPostById(

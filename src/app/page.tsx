@@ -50,7 +50,7 @@ async function Feed({ searchParams }: HomePageProps) {
           </h1>
           <p className="text-lg leading-8 text-muted">
             This foundation now includes auth flows, profile onboarding, a poll
-            composer, a feed, engagement actions, moderation scaffolding, and
+            composer, a list of recent polls, moderation scaffolding, and
             notifications pages designed for a hobby-scale rollout.
           </p>
         </div>
@@ -78,7 +78,7 @@ async function Feed({ searchParams }: HomePageProps) {
 
         <div className="grid gap-4">
           {posts.failed ? (
-            <LoadError what="the feed" />
+            <LoadError what="the polls" />
           ) : posts.data.length === 0 ? (
             <EmptyState
               title="No poll posts yet"

@@ -167,23 +167,6 @@ create table if not exists public.poll_participants (
   primary key (poll_id, token_hash)
 );
 
-create table if not exists public.reactions (
-  id uuid primary key default gen_random_uuid(),
-  post_id uuid not null references public.posts (id) on delete cascade,
-  user_id uuid not null references public.profiles (user_id) on delete cascade,
-  reaction_type text not null check (reaction_type in ('like', 'dislike')),
-  created_at timestamptz not null default now(),
-  unique (post_id, user_id)
-);
-
-create table if not exists public.reposts (
-  id uuid primary key default gen_random_uuid(),
-  post_id uuid not null references public.posts (id) on delete cascade,
-  user_id uuid not null references public.profiles (user_id) on delete cascade,
-  created_at timestamptz not null default now(),
-  unique (post_id, user_id)
-);
-
 create table if not exists public.reports (
   id uuid primary key default gen_random_uuid(),
   reporter_id uuid not null references public.profiles (user_id) on delete cascade,
@@ -213,6 +196,32 @@ create table if not exists public.notifications (
   created_at timestamptz not null default now()
 );
 
+-- The social features are gone (Victor, 2026-10-25): likes/dislikes
+-- (`reactions`) and reposts (`reposts`), with the two triggers that turned
+-- them into notifications. The product is a poll and voting-round tool; a
+-- poll's engagement is its ballots, which stay.
+--
+-- THIS DELETES DATA, permanently, the first time it runs against a database
+-- that still has these tables: every like, dislike and repost, and every
+-- `post_reaction` / `post_repost` notification. There is no undo short of a
+-- backup. On every later run, and on a fresh database, each statement finds
+-- nothing and does nothing.
+--
+-- Order matters. Dropping a table also drops its RLS policies, its triggers,
+-- its indexes and its grants, so the six policies, the two triggers and the
+-- two `*_post_id_idx` indexes need no statements of their own. The trigger
+-- functions are separate objects and can only be dropped once no trigger uses
+-- them, so they go after the tables. No view, foreign key or function body
+-- refers to either table, so no CASCADE is needed, and leaving it off means
+-- an unexpected dependent stops the paste instead of being silently dropped.
+-- The notifications go last, since the table they live in is created just
+-- above (on a fresh database it is empty).
+drop table if exists public.reactions;
+drop table if exists public.reposts;
+drop function if exists public.notify_post_reaction();
+drop function if exists public.notify_post_repost();
+delete from public.notifications where type in ('post_reaction', 'post_repost');
+
 -- Table privileges, stated outright rather than inherited.
 --
 -- Until now this file relied on Supabase's legacy default privileges, which
@@ -236,8 +245,6 @@ grant select, insert, update, delete on table
   public.poll_options,
   public.poll_votes,
   public.poll_participants,
-  public.reactions,
-  public.reposts,
   public.reports,
   public.notifications
   to anon, authenticated, service_role;
@@ -264,22 +271,34 @@ create unique index if not exists poll_votes_one_vote_per_participant_idx
   on public.poll_votes (poll_id, participant_hash)
   where participant_hash is not null;
 
-create index if not exists reactions_post_id_idx
-  on public.reactions (post_id);
-
-create index if not exists reposts_post_id_idx
-  on public.reposts (post_id);
-
 create index if not exists notifications_recipient_id_created_at_idx
   on public.notifications (recipient_id, created_at desc);
 
--- Reactions and reposts are toggleable, so a remove/re-add loop would let one
--- user flood another's inbox. Caps engagement notifications at one per actor,
--- per post, per type. report_reviewed is excluded so that a reviewed -> closed
--- transition notifies twice.
+-- Caps named vote notifications at one per voter, per poll post, so no ballot
+-- path can flood an author's inbox. report_reviewed is excluded so that a
+-- reviewed -> closed transition notifies twice.
+--
+-- It used to cover 'post_reaction' and 'post_repost' as well, the two types
+-- the removed social features produced. `create ... if not exists` never
+-- rewrites an existing index, so an index still carrying the old predicate is
+-- dropped first and rebuilt narrowed; once narrowed, the check finds nothing.
+do $$
+begin
+  if exists (
+    select 1
+    from pg_indexes
+    where schemaname = 'public'
+      and indexname = 'notifications_engagement_dedupe_idx'
+      and indexdef like '%post_reaction%'
+  ) then
+    drop index public.notifications_engagement_dedupe_idx;
+  end if;
+end
+$$;
+
 create unique index if not exists notifications_engagement_dedupe_idx
   on public.notifications (recipient_id, actor_id, post_id, type)
-  where type in ('poll_vote', 'post_reaction', 'post_repost');
+  where type = 'poll_vote';
 
 -- Anonymous responses notify at milestones (1, 5, 10, 25, 50, then every
 -- 100th), one row per milestone. The engagement index above cannot dedupe them:
@@ -670,85 +689,6 @@ for each row
 when (new.participant_hash is not null)
 execute function public.notify_poll_responses();
 
-create or replace function public.notify_post_reaction()
-returns trigger
-language plpgsql
-security definer
-set search_path = ''
-as $$
-declare
-  target_author uuid;
-  actor_name text;
-begin
-  select p.author_id into target_author
-  from public.posts as p where p.id = new.post_id;
-
-  if target_author is null or target_author = new.user_id then
-    return new;
-  end if;
-
-  select pr.username into actor_name
-  from public.profiles as pr where pr.user_id = new.user_id;
-
-  insert into public.notifications (recipient_id, actor_id, post_id, type, payload)
-  values (
-    target_author, new.user_id, new.post_id, 'post_reaction',
-    jsonb_build_object(
-      'actor_username', actor_name,
-      'reaction_type', new.reaction_type
-    )
-  )
-  on conflict do nothing;
-
-  return new;
-end;
-$$;
-
--- INSERT only. Switching like -> dislike is an UPDATE and deliberately does
--- not re-notify.
-drop trigger if exists notify_on_post_reaction on public.reactions;
-create trigger notify_on_post_reaction
-after insert on public.reactions
-for each row
-execute function public.notify_post_reaction();
-
-create or replace function public.notify_post_repost()
-returns trigger
-language plpgsql
-security definer
-set search_path = ''
-as $$
-declare
-  target_author uuid;
-  actor_name text;
-begin
-  select p.author_id into target_author
-  from public.posts as p where p.id = new.post_id;
-
-  if target_author is null or target_author = new.user_id then
-    return new;
-  end if;
-
-  select pr.username into actor_name
-  from public.profiles as pr where pr.user_id = new.user_id;
-
-  insert into public.notifications (recipient_id, actor_id, post_id, type, payload)
-  values (
-    target_author, new.user_id, new.post_id, 'post_repost',
-    jsonb_build_object('actor_username', actor_name)
-  )
-  on conflict do nothing;
-
-  return new;
-end;
-$$;
-
-drop trigger if exists notify_on_post_repost on public.reposts;
-create trigger notify_on_post_repost
-after insert on public.reposts
-for each row
-execute function public.notify_post_repost();
-
 create or replace function public.notify_report_reviewed()
 returns trigger
 language plpgsql
@@ -801,8 +741,6 @@ grant execute on function
   public.enforce_participation_mode_frozen(),
   public.notify_poll_vote(),
   public.notify_poll_responses(),
-  public.notify_post_reaction(),
-  public.notify_post_repost(),
   public.notify_report_reviewed()
   to anon, authenticated, service_role;
 
@@ -865,8 +803,6 @@ alter table public.polls enable row level security;
 alter table public.poll_options enable row level security;
 alter table public.poll_votes enable row level security;
 alter table public.poll_participants enable row level security;
-alter table public.reactions enable row level security;
-alter table public.reposts enable row level security;
 alter table public.reports enable row level security;
 alter table public.notifications enable row level security;
 
@@ -889,12 +825,6 @@ drop policy if exists "votes are public to read" on public.poll_votes;
 drop policy if exists "users can read their own votes" on public.poll_votes;
 drop policy if exists "users can vote once as themselves" on public.poll_votes;
 drop policy if exists "poll owners manage their participants" on public.poll_participants;
-drop policy if exists "reactions are public to read" on public.reactions;
-drop policy if exists "users can react as themselves" on public.reactions;
-drop policy if exists "users can remove their own reactions" on public.reactions;
-drop policy if exists "reposts are public to read" on public.reposts;
-drop policy if exists "users can create reposts as themselves" on public.reposts;
-drop policy if exists "users can remove their own reposts" on public.reposts;
 drop policy if exists "users can read their notifications" on public.notifications;
 drop policy if exists "users can update their notifications" on public.notifications;
 
@@ -1462,36 +1392,6 @@ grant execute on function public.issue_poll_invites(uuid, text[])
   to anon, authenticated, service_role;
 revoke all on function public.issue_poll_invites(uuid, text[]) from public, anon;
 grant execute on function public.issue_poll_invites(uuid, text[]) to authenticated;
-
-create policy "reactions are public to read"
-  on public.reactions
-  for select
-  using (true);
-
-create policy "users can react as themselves"
-  on public.reactions
-  for insert
-  with check (auth.uid() = user_id);
-
-create policy "users can remove their own reactions"
-  on public.reactions
-  for delete
-  using (auth.uid() = user_id);
-
-create policy "reposts are public to read"
-  on public.reposts
-  for select
-  using (true);
-
-create policy "users can create reposts as themselves"
-  on public.reposts
-  for insert
-  with check (auth.uid() = user_id);
-
-create policy "users can remove their own reposts"
-  on public.reposts
-  for delete
-  using (auth.uid() = user_id);
 
 create policy "users can read their notifications"
   on public.notifications

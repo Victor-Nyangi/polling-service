@@ -40,15 +40,6 @@ export const demoFeedPosts: FeedPost[] = [
         { id: "poll-1-option-3", label: "Moderation basics", position: 3, votes: 6 },
       ],
     },
-    reactions: {
-      likes: 15,
-      dislikes: 1,
-      viewerReaction: "like",
-    },
-    reposts: {
-      count: 4,
-      viewerHasReposted: true,
-    },
   },
   {
     id: "post-2",
@@ -71,14 +62,6 @@ export const demoFeedPosts: FeedPost[] = [
         { id: "poll-2-option-2", label: "Self-host everything", position: 2, votes: 2 },
         { id: "poll-2-option-3", label: "Firebase-only", position: 3, votes: 4 },
       ],
-    },
-    reactions: {
-      likes: 11,
-      dislikes: 0,
-    },
-    reposts: {
-      count: 2,
-      viewerHasReposted: false,
     },
   },
 ];
