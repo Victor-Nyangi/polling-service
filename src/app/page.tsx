@@ -7,6 +7,7 @@ import { PageSkeleton } from "@/components/page-skeleton";
 import { PollCard } from "@/components/poll-card";
 import { PollComposer } from "@/components/poll-composer";
 import { readNotice } from "@/lib/notice";
+import { readPollPreset } from "@/lib/poll-presets";
 import { getCurrentUser, getFeedPosts } from "@/lib/server/platform";
 
 export const dynamic = "force-dynamic";
@@ -31,27 +32,54 @@ export default function HomePage({ searchParams }: HomePageProps) {
   );
 }
 
+const ROUND_STEPS = [
+  {
+    title: "Set up the round",
+    detail:
+      "Pick the Awards / voting round preset: invite-only, results hidden until close, and a closing time.",
+  },
+  {
+    title: "Send one link per voter",
+    detail:
+      "Issue invite links from the poll's page, labelled with names if you like. Each link casts exactly one ballot.",
+  },
+  {
+    title: "Watch turnout, not choices",
+    detail:
+      "You see which links have been used and how many have voted. Nobody, you included, sees who chose what.",
+  },
+  {
+    title: "Results at the deadline",
+    detail:
+      "Voting stops at the closing time, enforced by the database, and the tally appears for everyone at once.",
+  },
+] as const;
+
 async function Feed({ searchParams }: HomePageProps) {
-  const [notice, currentUser, posts] = await Promise.all([
+  const [notice, currentUser, posts, query] = await Promise.all([
     readNotice(searchParams),
     getCurrentUser(),
     getFeedPosts(),
+    searchParams,
   ]);
+  const preset = readPollPreset(query.preset);
 
   return (
     <AppShell currentUser={currentUser}>
       <section className="rounded-3xl border border-border bg-card p-8 shadow-sm">
         <span className="inline-flex rounded-full bg-accent/10 px-3 py-1 font-mono text-sm font-medium text-accent">
-          MVP dashboard
+          Authentic voting rounds
         </span>
         <div className="mt-6 max-w-3xl space-y-4">
           <h1 className="font-display text-4xl font-semibold tracking-tight sm:text-5xl">
-            Build the poll-first social loop before everything else.
+            Run a vote people can trust.
           </h1>
           <p className="text-lg leading-8 text-muted">
-            This foundation now includes auth flows, profile onboarding, a poll
-            composer, a feed, engagement actions, moderation scaffolding, and
-            notifications pages designed for a hobby-scale rollout.
+            Staff awards, recognition votes and feedback rounds, where each
+            ballot is one person and nobody sees who chose what. Send every
+            voter a one-time invite link, set a closing time, and decide whether
+            the results show live or only once voting ends. Voters don&apos;t
+            need an account.
           </p>
         </div>
       </section>
@@ -59,30 +87,34 @@ async function Feed({ searchParams }: HomePageProps) {
       <NoticeBanner notice={notice} />
 
       <div className="grid gap-6 lg:grid-cols-[0.9fr_1.1fr]">
-        <div className="grid gap-6">
-          <PollComposer currentUser={currentUser} />
+        <div className="grid content-start gap-6">
+          <PollComposer currentUser={currentUser} preset={preset} />
 
           <section className="rounded-3xl border border-border bg-card p-6 shadow-sm">
             <h2 className="font-display text-xl font-semibold">
-              Implementation proposal
+              How a voting round works
             </h2>
-            <ul className="mt-4 grid gap-3 divide-y divide-border text-sm text-muted [&>li]:pt-3 [&>li:first-child]:pt-0">
-              <li>Next.js App Router for the web app and route handlers.</li>
-              <li>Supabase for auth, PostgreSQL, storage, and access control.</li>
-              <li>Vercel for low-friction hosting and preview deployments.</li>
-              <li>In-app notifications before true push infrastructure.</li>
-              <li>Moderation queue and report flow built into the MVP baseline.</li>
-            </ul>
+            <ol className="mt-4 grid gap-3 divide-y divide-border text-sm [&>li]:pt-3 [&>li:first-child]:pt-0">
+              {ROUND_STEPS.map((step, index) => (
+                <li key={step.title} className="grid gap-1">
+                  <span className="font-medium">
+                    {index + 1}. {step.title}
+                  </span>
+                  <span className="text-muted">{step.detail}</span>
+                </li>
+              ))}
+            </ol>
           </section>
         </div>
 
-        <div className="grid gap-4">
+        <div className="grid content-start gap-4">
+          <h2 className="font-display text-xl font-semibold">Recent polls</h2>
           {posts.failed ? (
-            <LoadError what="the feed" />
+            <LoadError what="the polls" />
           ) : posts.data.length === 0 ? (
             <EmptyState
-              title="No poll posts yet"
-              description="Create the first poll post to start validating the core engagement loop."
+              title="No polls yet"
+              description="Create the first voting round, or a quick poll, with the form on this page."
             />
           ) : (
             posts.data.map((post) => <PollCard key={post.id} post={post} />)

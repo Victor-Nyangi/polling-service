@@ -9,6 +9,18 @@ export function renderNotification(
 
   switch (type) {
     case "poll_vote": {
+      // A round with results hidden until close sends no option_label: the
+      // notify_poll_vote() trigger tells the owner who voted, never how.
+      if (payload.results_hidden === true) {
+        const question =
+          typeof payload.question === "string" ? payload.question : "your poll";
+
+        return {
+          title: "New vote on your poll",
+          body: `${actor} voted on "${question}".`,
+        };
+      }
+
       const option =
         typeof payload.option_label === "string"
           ? payload.option_label
@@ -44,19 +56,6 @@ export function renderNotification(
             : `${count} people have responded to "${question}".`,
       };
     }
-    case "post_reaction": {
-      const verb = payload.reaction_type === "dislike" ? "disliked" : "liked";
-
-      return {
-        title: "New reaction on your post",
-        body: `${actor} ${verb} your post.`,
-      };
-    }
-    case "post_repost":
-      return {
-        title: "Your post was reposted",
-        body: `${actor} reposted your post.`,
-      };
     case "report_reviewed": {
       const status = payload.status === "closed" ? "closed" : "reviewed";
 

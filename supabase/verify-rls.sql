@@ -4,7 +4,7 @@
 -- what can a caller with no session (anon) do to them? Every user-owned table
 -- in schema.sql is covered: profiles, posts, polls, poll_options, poll_votes
 -- (signed-in votes and anonymous participant_hash ballots), poll_participants
--- (invites), reactions, reposts, reports, notifications, plus the two RPCs that
+-- (invites), reports, notifications, plus the two RPCs that
 -- bypass RLS on purpose (issue_poll_invites, cast_anonymous_vote) and the
 -- public tally view. A third user, S, is a moderator, to check what staff can
 -- and cannot change on a report. Positive controls check that A (and S) CAN
@@ -41,13 +41,13 @@
 -- `actual` shows which form it took. An expected `allowed: ...` must match
 -- exactly.
 --
--- KNOWN FAILS. One check expects behaviour the current schema.sql does not
--- give, on purpose, so it shows FAIL until a decision is made. It carries a
--- `note`:
---   * reactions: switching your own like to a dislike is refused. The app does
---     it with an upsert (toggleReactionAction), whose conflict path is an
---     UPDATE, and reactions has no UPDATE policy. Too restrictive: an app bug,
---     not a hole.
+-- KNOWN FAILS. None. Until 2026-10-25 one check failed on purpose: switching
+-- your own like to a dislike was refused, because the app upserted
+-- (toggleReactionAction) and reactions had no UPDATE policy. That went with
+-- the social features (reactions and reposts were dropped from schema.sql), so
+-- the check and every other reactions and reposts check are gone. Any FAIL is
+-- now a real finding.
+--
 -- Tested 2026-10-08 against a local supabase/postgres 17.6.1.166 image with
 -- schema.sql applied: 140 checks, 138 PASS, 2 FAIL. The second FAIL was a
 -- reports hole (a user could file a report already closed and "reviewed" by
@@ -68,7 +68,12 @@
 -- report's reporter, reason, created_at or target, or record a review under
 -- someone else's name. schema.sql then limited staff to status, reviewed_by and
 -- reviewed_at, with reviewed_by pinned to the moderator: 151 checks, 150 PASS,
--- the reactions one FAIL. Not yet run against the live database.
+-- the reactions one FAIL; Victor's 2026-10-20 run on the live database gave the
+-- same. On 2026-10-25 the social features were removed, taking the 19
+-- reactions and reposts checks with them (12 as A, 7 as anon): 132 checks,
+-- 132 PASS, 0 FAIL on the same local image. The same day, voting rounds with
+-- results hidden until close (results_visibility) added seven checks: 139
+-- checks, 139 PASS, 0 FAIL.
 --
 -- FIXTURES. Every fixture id comes from pg_temp.id('<key>') and every invite or
 -- ballot hash from pg_temp.h('<key>'). An unknown key raises instead of
@@ -82,7 +87,10 @@
 --               a post with an invite-mode poll, no ballots yet
 --   X_invite1, X_invite2   two unused invites on that poll (hash keys)
 --   X_plain_post           a post with no poll
---   X_reaction, X_repost   X's like and repost of the other user's X_post
+--   A_round_post, A_round_poll, A_round_opt1, A_round_opt2
+--               A's voting round: open mode, results hidden until it
+--               closes (results_visibility 'after_close'), closing in a day
+--   B_round_vote           B's signed-in vote on A's round
 --   X_report               X's report of the other user's post
 --   X_notification         a notification addressed to X
 -- Impersonation follows Supabase's documented pattern: `set local role` plus
@@ -137,8 +145,11 @@ begin
     when 'invite_opt1' then '000000000013'
     when 'invite_opt2' then '000000000014'
     when 'plain_post' then '000000000021'
-    when 'reaction' then '000000000031'
-    when 'repost' then '000000000032'
+    when 'round_post' then '000000000051'
+    when 'round_poll' then '000000000052'
+    when 'round_opt1' then '000000000053'
+    when 'round_opt2' then '000000000054'
+    when 'round_vote' then '000000000055'
     when 'report' then '000000000033'
     when 'notification' then '000000000041'
   end;
@@ -326,7 +337,8 @@ insert into public.posts (id, author_id, body) values
   (pg_temp.id('A_plain_post'), pg_temp.id('A'), 'verify-rls: A plain post'),
   (pg_temp.id('B_post'), pg_temp.id('B'), 'verify-rls: B post with an open poll'),
   (pg_temp.id('B_invite_post'), pg_temp.id('B'), 'verify-rls: B post with an invite poll'),
-  (pg_temp.id('B_plain_post'), pg_temp.id('B'), 'verify-rls: B plain post');
+  (pg_temp.id('B_plain_post'), pg_temp.id('B'), 'verify-rls: B plain post'),
+  (pg_temp.id('A_round_post'), pg_temp.id('A'), 'verify-rls: A voting round');
 
 insert into public.polls (id, post_id, question, participation_mode) values
   (pg_temp.id('A_poll'), pg_temp.id('A_post'), 'verify-rls A open?', 'open'),
@@ -343,6 +355,19 @@ insert into public.poll_options (id, poll_id, label, position) values
   (pg_temp.id('B_opt2'), pg_temp.id('B_poll'), 'B two', 2),
   (pg_temp.id('B_invite_opt1'), pg_temp.id('B_invite_poll'), 'B invite one', 1),
   (pg_temp.id('B_invite_opt2'), pg_temp.id('B_invite_poll'), 'B invite two', 2);
+
+-- A's voting round. Inserted on its own because it is the only poll with a
+-- deadline and hidden results.
+insert into public.polls (id, post_id, question, participation_mode, results_visibility, closes_at) values
+  (pg_temp.id('A_round_poll'), pg_temp.id('A_round_post'), 'verify-rls A round?', 'open',
+   'after_close', now() + interval '1 day');
+
+insert into public.poll_options (id, poll_id, label, position) values
+  (pg_temp.id('A_round_opt1'), pg_temp.id('A_round_poll'), 'A round one', 1),
+  (pg_temp.id('A_round_opt2'), pg_temp.id('A_round_poll'), 'A round two', 2);
+
+insert into public.poll_votes (id, poll_id, option_id, voter_id) values
+  (pg_temp.id('B_round_vote'), pg_temp.id('A_round_poll'), pg_temp.id('A_round_opt1'), pg_temp.id('B'));
 
 -- Signed-in votes cross over: A on B's poll, B on A's poll.
 insert into public.poll_votes (id, poll_id, option_id, voter_id) values
@@ -368,14 +393,6 @@ insert into public.poll_participants (poll_id, token_hash, label) values
   (pg_temp.id('B_invite_poll'), pg_temp.h('B_invite1'), 'B guest one'),
   (pg_temp.id('B_invite_poll'), pg_temp.h('B_invite2'), 'B guest two');
 
-insert into public.reactions (id, post_id, user_id, reaction_type) values
-  (pg_temp.id('A_reaction'), pg_temp.id('B_post'), pg_temp.id('A'), 'like'),
-  (pg_temp.id('B_reaction'), pg_temp.id('A_post'), pg_temp.id('B'), 'like');
-
-insert into public.reposts (id, post_id, user_id) values
-  (pg_temp.id('A_repost'), pg_temp.id('B_post'), pg_temp.id('A')),
-  (pg_temp.id('B_repost'), pg_temp.id('A_post'), pg_temp.id('B'));
-
 insert into public.reports (id, reporter_id, target_type, target_post_id, reason) values
   (pg_temp.id('A_report'), pg_temp.id('A'), 'post', pg_temp.id('B_post'), 'verify-rls A report'),
   (pg_temp.id('B_report'), pg_temp.id('B'), 'post', pg_temp.id('A_post'), 'verify-rls B report');
@@ -397,7 +414,7 @@ begin
     $q$select 1 from public.profiles where user_id in (pg_temp.id('A'), pg_temp.id('B'))$q$);
   perform pg_temp.expect_read('setup', 'S is a moderator', 'allowed: 1 visible',
     $q$select 1 from public.profiles where user_id = pg_temp.id('S') and role = 'moderator'$q$);
-  perform pg_temp.expect_read('setup', 'posts', 'allowed: 6 visible',
+  perform pg_temp.expect_read('setup', 'posts', 'allowed: 7 visible',
     $q$select 1 from public.posts where author_id in (pg_temp.id('A'), pg_temp.id('B'))$q$);
   perform pg_temp.expect_read('setup', 'polls', 'allowed: 4 visible',
     $q$select 1 from public.polls where id in (pg_temp.id('A_poll'), pg_temp.id('A_invite_poll'), pg_temp.id('B_poll'), pg_temp.id('B_invite_poll'))$q$);
@@ -407,10 +424,8 @@ begin
     $q$select 1 from public.poll_votes where id in (pg_temp.id('A_vote'), pg_temp.id('B_vote'), pg_temp.id('A_ballot'), pg_temp.id('B_ballot'))$q$);
   perform pg_temp.expect_read('setup', 'poll participants (4 invites, 2 used)', 'allowed: 6 visible',
     $q$select 1 from public.poll_participants where poll_id in (pg_temp.id('A_poll'), pg_temp.id('A_invite_poll'), pg_temp.id('B_poll'), pg_temp.id('B_invite_poll'))$q$);
-  perform pg_temp.expect_read('setup', 'reactions, reposts, reports', 'allowed: 6 visible',
-    $q$select id from public.reactions where id in (pg_temp.id('A_reaction'), pg_temp.id('B_reaction'))
-       union all select id from public.reposts where id in (pg_temp.id('A_repost'), pg_temp.id('B_repost'))
-       union all select id from public.reports where id in (pg_temp.id('A_report'), pg_temp.id('B_report'))$q$);
+  perform pg_temp.expect_read('setup', 'reports', 'allowed: 2 visible',
+    $q$select id from public.reports where id in (pg_temp.id('A_report'), pg_temp.id('B_report'))$q$);
   perform pg_temp.expect_read('setup', 'notifications', 'allowed: 2 visible',
     $q$select 1 from public.notifications where id in (pg_temp.id('A_notification'), pg_temp.id('B_notification'))$q$);
 end
@@ -591,44 +606,6 @@ begin
   perform pg_temp.expect_write('poll_participants', 'control: A issues an invite on own poll (RPC)', 'allowed: 1 rows',
     $q$select * from public.issue_poll_invites(pg_temp.id('A_invite_poll'), array['verify-rls'])$q$);
 
-  -- reactions: public to read; insert and delete as yourself.
-  perform pg_temp.expect_read('reactions', 'A reads B''s reaction', 'allowed: 1 visible',
-    $q$select 1 from public.reactions where id = pg_temp.id('B_reaction')$q$,
-    p_note => 'public by design');
-  perform pg_temp.expect_write('reactions', 'A flips B''s reaction', 'denied: 0 rows',
-    $q$update public.reactions set reaction_type = 'dislike' where id = pg_temp.id('B_reaction')$q$);
-  perform pg_temp.expect_write('reactions', 'A removes B''s reaction', 'denied: 0 rows',
-    $q$delete from public.reactions where id = pg_temp.id('B_reaction')$q$);
-  perform pg_temp.expect_write('reactions', 'A reacts as B', 'denied: 42501',
-    $q$insert into public.reactions (post_id, user_id, reaction_type)
-       values (pg_temp.id('A_plain_post'), pg_temp.id('B'), 'like')$q$);
-  perform pg_temp.expect_write('reactions', 'control: A reacts', 'allowed: 1 rows',
-    $q$insert into public.reactions (post_id, user_id, reaction_type)
-       values (pg_temp.id('B_plain_post'), pg_temp.id('A'), 'like')$q$);
-  perform pg_temp.expect_write('reactions', 'control: A removes own reaction', 'allowed: 1 rows',
-    $q$delete from public.reactions where id = pg_temp.id('A_reaction')$q$);
-  perform pg_temp.expect_write('reactions', 'control: A switches own like to dislike (app upsert)', 'allowed: 1 rows',
-    $q$insert into public.reactions (post_id, user_id, reaction_type)
-       values (pg_temp.id('B_post'), pg_temp.id('A'), 'dislike')
-       on conflict (post_id, user_id) do update
-         set post_id = excluded.post_id,
-             user_id = excluded.user_id,
-             reaction_type = excluded.reaction_type$q$,
-    p_note => 'KNOWN FAIL (too restrictive): toggleReactionAction upserts; reactions has no UPDATE policy, so the switch is refused');
-
-  -- reposts: public to read; insert and delete as yourself.
-  perform pg_temp.expect_read('reposts', 'A reads B''s repost', 'allowed: 1 visible',
-    $q$select 1 from public.reposts where id = pg_temp.id('B_repost')$q$,
-    p_note => 'public by design');
-  perform pg_temp.expect_write('reposts', 'A removes B''s repost', 'denied: 0 rows',
-    $q$delete from public.reposts where id = pg_temp.id('B_repost')$q$);
-  perform pg_temp.expect_write('reposts', 'A reposts as B', 'denied: 42501',
-    $q$insert into public.reposts (post_id, user_id) values (pg_temp.id('A_plain_post'), pg_temp.id('B'))$q$);
-  perform pg_temp.expect_write('reposts', 'control: A reposts', 'allowed: 1 rows',
-    $q$insert into public.reposts (post_id, user_id) values (pg_temp.id('B_plain_post'), pg_temp.id('A'))$q$);
-  perform pg_temp.expect_write('reposts', 'control: A removes own repost', 'allowed: 1 rows',
-    $q$delete from public.reposts where id = pg_temp.id('A_repost')$q$);
-
   -- reports: anyone signed in files as themselves; only staff read or update.
   perform pg_temp.expect_read('reports', 'A reads B''s report', 'denied: 0 visible',
     $q$select 1 from public.reports where id = pg_temp.id('B_report')$q$);
@@ -679,6 +656,26 @@ begin
   -- Tallies are public; they are counts, never ballots.
   perform pg_temp.expect_read('poll_option_vote_counts', 'control: A reads B''s poll tallies', 'allowed: 2 visible',
     $q$select 1 from public.poll_option_vote_counts where poll_id = pg_temp.id('B_poll')$q$);
+
+  -- A voting round with hidden results: not even its owner sees the tally
+  -- before it closes, or can change the rule or the deadline to get at it.
+  perform pg_temp.expect_read('poll_option_vote_counts', 'A reads own open round''s hidden tally', 'denied: 0 visible',
+    $q$select 1 from public.poll_option_vote_counts
+       where poll_id = pg_temp.id('A_round_poll') and votes is not null$q$);
+  perform pg_temp.expect_read('poll_option_vote_counts', 'control: A reads own open round''s turnout', 'allowed: 2 visible',
+    $q$select 1 from public.poll_option_vote_counts
+       where poll_id = pg_temp.id('A_round_poll') and total_votes = 1$q$);
+  perform pg_temp.expect_write('polls', 'A switches own round to live results', 'denied: 42501',
+    $q$update public.polls set results_visibility = 'live' where id = pg_temp.id('A_round_poll')$q$);
+  perform pg_temp.expect_write('polls', 'A moves own round''s deadline into the past', 'denied: 42501',
+    $q$update public.polls set closes_at = now() - interval '1 minute' where id = pg_temp.id('A_round_poll')$q$);
+  perform pg_temp.expect_read('notifications', 'A reads B''s choice on own round from the vote notification', 'denied: 0 visible',
+    $q$select 1 from public.notifications
+       where post_id = pg_temp.id('A_round_post') and type = 'poll_vote' and payload ? 'option_label'$q$);
+  perform pg_temp.expect_read('notifications', 'control: A is told B voted on own round', 'allowed: 1 visible',
+    $q$select 1 from public.notifications
+       where post_id = pg_temp.id('A_round_post') and type = 'poll_vote'
+         and payload ->> 'actor_username' is not null$q$);
 end
 $$;
 
@@ -795,25 +792,6 @@ begin
   perform pg_temp.expect_write('poll_participants', 'anon issues invites on B''s poll (RPC)', 'denied: 42501',
     $q$select * from public.issue_poll_invites(pg_temp.id('B_invite_poll'), array['anon'])$q$);
 
-  perform pg_temp.expect_read('reactions', 'anon reads B''s reaction', 'allowed: 1 visible',
-    $q$select 1 from public.reactions where id = pg_temp.id('B_reaction')$q$,
-    p_note => 'public by design');
-  perform pg_temp.expect_write('reactions', 'anon reacts as B', 'denied: 42501',
-    $q$insert into public.reactions (post_id, user_id, reaction_type)
-       values (pg_temp.id('A_plain_post'), pg_temp.id('B'), 'like')$q$);
-  perform pg_temp.expect_write('reactions', 'anon flips B''s reaction', 'denied: 0 rows',
-    $q$update public.reactions set reaction_type = 'dislike' where id = pg_temp.id('B_reaction')$q$);
-  perform pg_temp.expect_write('reactions', 'anon removes B''s reaction', 'denied: 0 rows',
-    $q$delete from public.reactions where id = pg_temp.id('B_reaction')$q$);
-
-  perform pg_temp.expect_read('reposts', 'anon reads B''s repost', 'allowed: 1 visible',
-    $q$select 1 from public.reposts where id = pg_temp.id('B_repost')$q$,
-    p_note => 'public by design');
-  perform pg_temp.expect_write('reposts', 'anon reposts as B', 'denied: 42501',
-    $q$insert into public.reposts (post_id, user_id) values (pg_temp.id('A_plain_post'), pg_temp.id('B'))$q$);
-  perform pg_temp.expect_write('reposts', 'anon removes B''s repost', 'denied: 0 rows',
-    $q$delete from public.reposts where id = pg_temp.id('B_repost')$q$);
-
   perform pg_temp.expect_read('reports', 'anon reads B''s report', 'denied: 0 visible',
     $q$select 1 from public.reports where id = pg_temp.id('B_report')$q$);
   perform pg_temp.expect_write('reports', 'anon files a report as B', 'denied: 42501',
@@ -835,6 +813,9 @@ begin
 
   perform pg_temp.expect_read('poll_option_vote_counts', 'control: anon reads B''s poll tallies', 'allowed: 2 visible',
     $q$select 1 from public.poll_option_vote_counts where poll_id = pg_temp.id('B_poll')$q$);
+  perform pg_temp.expect_read('poll_option_vote_counts', 'anon reads A''s open round''s hidden tally', 'denied: 0 visible',
+    $q$select 1 from public.poll_option_vote_counts
+       where poll_id = pg_temp.id('A_round_poll') and votes is not null$q$);
 end
 $$;
 

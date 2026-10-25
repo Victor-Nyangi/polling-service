@@ -45,7 +45,7 @@ export default async function NotificationsPage({
       ) : notifications.data.length === 0 ? (
         <EmptyState
           title="No notifications yet"
-          description="New votes, reposts, and moderation events will show up here."
+          description="New votes, response milestones, and moderation events will show up here."
         />
       ) : (
         <div className="grid gap-4">

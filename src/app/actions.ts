@@ -30,6 +30,7 @@ import {
 } from "@/lib/invite";
 import { buildNoticeHref } from "@/lib/notice";
 import { ONBOARDING_REQUIRED_MESSAGE, needsOnboarding } from "@/lib/onboarding";
+import { parseRoundSettings } from "@/lib/poll-presets";
 import { isPollClosed } from "@/lib/poll-status";
 import { safeRedirectPath } from "@/lib/redirect";
 import { isStaffRole } from "@/lib/roles";
@@ -324,6 +325,12 @@ export async function createPollPostAction(formData: FormData) {
   const options = ["option1", "option2", "option3", "option4"]
     .map((name) => stringValue(formData, name))
     .filter(Boolean);
+  // polls_hidden_results_need_close_check is the guarantee that hidden
+  // results come with a deadline; this words the refusal before any insert.
+  const round = parseRoundSettings({
+    resultsVisibility: stringValue(formData, "resultsVisibility"),
+    closesIn: stringValue(formData, "closesIn"),
+  });
 
   if (!question || options.length < 2) {
     await redirectWithNotice(
@@ -331,6 +338,11 @@ export async function createPollPostAction(formData: FormData) {
       "error",
       "Provide a question and at least two poll options.",
     );
+  }
+
+  if (!round.ok) {
+    await redirectWithNotice(redirectTo, "error", round.message);
+    throw new Error("Round settings missing after redirect guard.");
   }
 
   const { supabase, user } = await requireAuthenticatedUser(redirectTo);
@@ -368,6 +380,8 @@ export async function createPollPostAction(formData: FormData) {
       post_id: post.id,
       question,
       participation_mode: participationMode,
+      results_visibility: round.resultsVisibility,
+      closes_at: round.closesAt,
     })
     .select("id")
     .single();
@@ -779,88 +793,6 @@ export async function revokeInviteAction(formData: FormData) {
 
   revalidatePath(redirectTo);
   redirect(buildNoticeHref(redirectTo, "success", "Invite revoked. Its link no longer works."));
-}
-
-export async function setReactionAction(formData: FormData) {
-  const redirectTo = redirectTarget(formData);
-  await requireConfigured(redirectTo);
-  const postId = stringValue(formData, "postId");
-  const reactionType = stringValue(formData, "reactionType");
-
-  if (reactionType !== "like" && reactionType !== "dislike") {
-    await redirectWithNotice(redirectTo, "error", "Invalid reaction type.");
-  }
-
-  const { supabase, user } = await requireAuthenticatedUser(redirectTo);
-  const { data: existing } = await supabase
-    .from("reactions")
-    .select("id, reaction_type")
-    .eq("post_id", postId)
-    .eq("user_id", user.id)
-    .maybeSingle();
-
-  if (existing?.reaction_type === reactionType) {
-    const { error } = await supabase.from("reactions").delete().eq("id", existing.id);
-
-    if (error) {
-      await redirectWithNotice(redirectTo, "error", error.message);
-    }
-
-    revalidatePath("/");
-    redirect(buildNoticeHref(redirectTo, "success", "Reaction removed."));
-  }
-
-  const { error } = await supabase.from("reactions").upsert(
-    {
-      post_id: postId,
-      user_id: user.id,
-      reaction_type: reactionType,
-    },
-    { onConflict: "post_id,user_id" },
-  );
-
-  if (error) {
-    await redirectWithNotice(redirectTo, "error", error.message);
-  }
-
-  revalidatePath("/");
-  redirect(buildNoticeHref(redirectTo, "success", "Reaction updated."));
-}
-
-export async function toggleRepostAction(formData: FormData) {
-  const redirectTo = redirectTarget(formData);
-  await requireConfigured(redirectTo);
-  const postId = stringValue(formData, "postId");
-  const { supabase, user } = await requireAuthenticatedUser(redirectTo);
-  const { data: existing } = await supabase
-    .from("reposts")
-    .select("id")
-    .eq("post_id", postId)
-    .eq("user_id", user.id)
-    .maybeSingle();
-
-  if (existing) {
-    const { error } = await supabase.from("reposts").delete().eq("id", existing.id);
-
-    if (error) {
-      await redirectWithNotice(redirectTo, "error", error.message);
-    }
-
-    revalidatePath("/");
-    redirect(buildNoticeHref(redirectTo, "success", "Repost removed."));
-  }
-
-  const { error } = await supabase.from("reposts").insert({
-    post_id: postId,
-    user_id: user.id,
-  });
-
-  if (error) {
-    await redirectWithNotice(redirectTo, "error", error.message);
-  }
-
-  revalidatePath("/");
-  redirect(buildNoticeHref(redirectTo, "success", "Reposted to your profile."));
 }
 
 export async function createReportAction(formData: FormData) {

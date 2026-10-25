@@ -11,7 +11,7 @@ const toOneEmbed = {
   poll_votes: [],
 };
 
-// The shape it returns for a to-many relationship such as `reactions ( ... )`,
+// The shape it returns for a to-many relationship such as `poll_options ( ... )`,
 // and for a to-one relationship whose uniqueness it cannot prove.
 const toManyEmbed = [toOneEmbed];
 

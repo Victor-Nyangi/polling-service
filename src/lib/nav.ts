@@ -6,7 +6,7 @@ import { normalizeUsername } from "@/lib/username";
  * classes, so phones and desktops can never disagree about where the links go.
  */
 export const NAV_ITEMS = [
-  { href: "/", label: "Feed" },
+  { href: "/", label: "Polls" },
   { href: "/notifications", label: "Notifications" },
   { href: "/moderation", label: "Moderation" },
   { href: "/onboarding", label: "Profile" },

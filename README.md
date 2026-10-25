@@ -1,8 +1,29 @@
 # Digital Brand Platform
 
-A web-first MVP foundation for a poll-centric social platform. The project is
-designed to validate the core loop first, then expand into richer discovery,
-analytics, privacy controls, messaging, and multilingual support.
+Authentic voting rounds: staff awards, recognition votes and feedback rounds,
+where one person, one vote and a secret ballot are the point.
+
+## Positioning
+
+Most poll tools count clicks. This one is for the votes where the count has to
+be defensible:
+
+- **One person, one vote.** An invite-only poll accepts a ballot only through a
+  one-time invite link, and the database refuses a second ballot from the same
+  link and any signed-in ballot that skips the invite.
+- **A secret ballot.** The owner sees turnout (which links were used, how many
+  voted) and the tally, never who chose what. Only token hashes are stored.
+- **Results when voting ends.** A round can hide its per-option counts from
+  everyone, its owner included, until the closing time, so early votes can't
+  steer late ones. The database withholds them, not just the page.
+- **A real deadline.** Voting stops at `closes_at`, enforced by a trigger,
+  whichever path the ballot takes.
+- **Voters need no account.** Only the person running the round signs in.
+
+The composer opens on the **Awards / voting round** preset (invite-only,
+results after close, closes in a week). **Quick poll** (`/?preset=quick`) keeps
+the open, live-results poll that anyone with the link can answer. Every setting
+can be changed under either preset.
 
 ## Stack
 
@@ -57,14 +78,14 @@ All four checks run on every pull request via `.github/workflows/ci.yml`.
 ## Initial MVP priorities
 
 1. Authentication and profile onboarding
-2. Poll-post creation and feed
-3. Voting, likes, reposts, and sharing
+2. Poll creation and the list of recent polls
+3. Voting (signed-in, anonymous, and invite-only) and sharing by permalink
 4. Basic moderation and notifications
 5. Deployment hardening and observability
 
 ## Current implemented routes
 
-- `/` — feed, MVP overview, and poll composer
+- `/` — recent polls, how a voting round works, and the poll composer (opens on the Awards / voting round preset; `/?preset=quick` for a quick poll)
 - `/p/[postId]` — public permalink for one poll post (works signed-out); its author also gets the Open / Invite-only switch, invite issuing, and turnout
 - `/p/[postId]?invite=<token>` — an invite link: votes on an invite-only poll, signed in or not, then redirects to the bare permalink
 - `/u/[username]` — public profile and that account's polls (works signed-out)
@@ -165,23 +186,32 @@ notification triggers, and session persistence are all working together.
 - **Schema changes**: edit `supabase/schema.sql`, re-run it in the SQL editor,
   then re-run `supabase/verify.sql` and `supabase/verify-rls.sql`. There is no
   migration tool — keep every statement re-runnable.
-- **Pending re-paste (2026-10-11, extended 2026-10-13, 2026-10-14 and 2026-10-15)**: "users
-  can create reports" now requires a new report to be `open` with no reviewer,
-  and both it and "users can create their own posts" require `created_at` to be
-  the server's `now()` (a client-supplied timestamp is refused). Posts also lost
-  their UPDATE grant: the app has no post editing, so no column is granted back.
-  Staff can now update only a report's `status`, `reviewed_by` and
-  `reviewed_at`, and `reviewed_by` must be the moderator making the change.
-  `schema.sql` also now states every table and function grant outright
-  (select, insert, update, delete, and execute, to `anon`, `authenticated` and
-  `service_role`) instead of relying on Supabase's legacy default privileges,
-  which new projects no longer apply. **Deadline 2026-10-30**: that is when the
-  Supabase CLI drops `auto_expose_new_tables`, after which a database without
-  these explicit grants refuses every API request with 42501. On the live
-  database the grants change nothing (they reproduce what it already has);
-  they matter for any new project, branch, or local stack.
-  The owner must re-paste `schema.sql` into the live database, then re-run both
-  verify files (expect 151 checks, 150 PASS, 1 FAIL: reactions).
+- **Pending re-paste (2026-10-25): the social features are removed, and this
+  deletes data.** Likes/dislikes and reposts are gone from the app, and
+  `schema.sql` now drops the `reactions` and `reposts` tables (with their six
+  RLS policies, two triggers and two indexes), the `notify_post_reaction()` and
+  `notify_post_repost()` trigger functions, and every `post_reaction` /
+  `post_repost` notification, and narrows `notifications_engagement_dedupe_idx`
+  to `poll_vote`. **The first paste on the live database permanently deletes
+  every like, dislike, repost and the notifications they produced**; there is no
+  undo short of a backup. Later pastes do nothing new. Polls, options, ballots,
+  invites, reports, profiles and the other notification types are untouched.
+  After pasting, re-run both verify files: `verify-rls.sql` should give
+  **132 checks, 132 PASS, 0 FAIL** (the reactions FAIL accepted on 2026-10-11
+  is gone with the table). The previous pending changes (2026-10-11 to
+  2026-10-15: report and post `created_at` pinned, posts' UPDATE grant revoked,
+  staff limited to a report's moderation columns, every grant stated outright)
+  were pasted on 2026-10-20, giving 151 checks, 150 PASS, 1 FAIL.
+- **Pending re-paste (2026-10-25, voting rounds; apply after the social-features
+  removal above, both are in the same `schema.sql`)**: adds
+  `polls.results_visibility` (`live`, the default for every existing poll, or
+  `after_close`), with a check that `after_close` has a `closes_at`.
+  `poll_option_vote_counts` now returns a null `votes` for an `after_close`
+  poll that hasn't closed yet, plus a `total_votes` turnout column. On such a
+  poll, `notify_poll_vote()` leaves the choice out of the owner's notification.
+  This deletes nothing, and existing polls behave exactly as before. After
+  pasting: `verify.sql` passes and `verify-rls.sql` gives **139 checks,
+  139 PASS, 0 FAIL**.
 - **Preview deployments**: Vercel builds every pull request. They share the
   production database unless you point Preview at a separate Supabase project.
 - **Environments**: keep `development` and `production` only. Add staging when

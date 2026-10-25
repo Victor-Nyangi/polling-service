@@ -59,35 +59,28 @@ describe("renderNotification", () => {
     }
   });
 
-  it("distinguishes likes from dislikes", () => {
+  it("names the voter but not the choice on a round with hidden results", () => {
     expect(
-      renderNotification("post_reaction", {
+      renderNotification("poll_vote", {
         actor_username: "ada",
-        reaction_type: "like",
-      }).body,
-    ).toBe("@ada liked your post.");
-
-    expect(
-      renderNotification("post_reaction", {
-        actor_username: "ada",
-        reaction_type: "dislike",
-      }).body,
-    ).toBe("@ada disliked your post.");
-  });
-
-  it("treats an unknown reaction type as a like", () => {
-    expect(renderNotification("post_reaction", {}).body).toBe(
-      "Someone liked your post.",
-    );
-  });
-
-  it("renders a repost", () => {
-    expect(
-      renderNotification("post_repost", { actor_username: "ada" }),
+        question: "Colleague of the year?",
+        results_hidden: true,
+      }),
     ).toEqual({
-      title: "Your post was reposted",
-      body: "@ada reposted your post.",
+      title: "New vote on your poll",
+      body: '@ada voted on "Colleague of the year?".',
     });
+  });
+
+  it("ignores a results_hidden flag that is not literally true", () => {
+    expect(
+      renderNotification("poll_vote", {
+        actor_username: "ada",
+        option_label: "Yes",
+        question: "Q?",
+        results_hidden: "true",
+      }).body,
+    ).toBe('@ada voted "Yes" on "Q?".');
   });
 
   it("renders a reviewed report, defaulting the status to reviewed", () => {
@@ -120,7 +113,11 @@ describe("renderNotification", () => {
 
   it("treats an empty actor username as anonymous", () => {
     expect(
-      renderNotification("post_repost", { actor_username: "" }).body,
-    ).toBe("Someone reposted your post.");
+      renderNotification("poll_vote", {
+        actor_username: "",
+        option_label: "Yes",
+        question: "Q?",
+      }).body,
+    ).toBe('Someone voted "Yes" on "Q?".');
   });
 });

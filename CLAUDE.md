@@ -37,9 +37,9 @@ Next.js App Router + Supabase (Postgres, Auth, RLS). Product background lives in
 
 **Column privileges matter as much as RLS.** RLS policies are row-level, and the table-level grants cover every column, so a `auth.uid() = user_id` update policy would otherwise let a user set their own `role` to `admin` via the public anon key. `schema.sql` revokes the table-wide UPDATE on `profiles` and grants back only the self-service columns. Apply the same pattern to any new table with privileged columns. Those table-level grants are explicit in `schema.sql` (select/insert/update/delete to `anon`, `authenticated` and `service_role`, plus execute on every function) because new Supabase projects no longer grant them implicitly. A new table or function goes into that grant list, and its grant must come *before* any revoke on it, or a re-run of the file re-widens what the revoke narrowed.
 
-**Data shaping happens once, at the boundary.** `platform.ts` runs deeply-nested PostgREST selects (post → poll → options/votes, reactions, reposts) and maps the loose row shapes into the domain types in `src/lib/types.ts` (`FeedPost`, `CurrentUser`, `AppNotification`, `ModerationReport`). Vote counts and percentages are derived in TS from raw vote rows, not aggregated in SQL. Components consume only `src/lib/types.ts` — never raw Supabase rows.
+**Data shaping happens once, at the boundary.** `platform.ts` runs deeply-nested PostgREST selects (post → author, poll → options/votes) and maps the loose row shapes into the domain types in `src/lib/types.ts` (`FeedPost`, `CurrentUser`, `AppNotification`, `ModerationReport`). Vote counts and percentages are derived in TS from raw vote rows, not aggregated in SQL. Components consume only `src/lib/types.ts` — never raw Supabase rows.
 
-Feed pages set `export const dynamic = "force-dynamic"` and actions call `revalidatePath("/")` after mutations.
+Poll pages (`/`, `/p/[postId]`, `/u/[username]`) set `export const dynamic = "force-dynamic"` and actions call `revalidatePath("/")` after mutations.
 
 ## Conventions
 
