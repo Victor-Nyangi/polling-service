@@ -26,6 +26,7 @@ export type PollOption = {
   id: string;
   label: string;
   position: number;
+  /** 0 while the poll's results are hidden (see `resultsHidden`). */
   votes: number;
 };
 
@@ -45,9 +46,24 @@ export type FeedPost = {
   poll: {
     id: string;
     question: string;
+    /**
+     * "closed" once `polls.status` says so or `closesAt` has passed, the two
+     * things the vote trigger refuses on.
+     */
     status: "active" | "closed";
     options: PollOption[];
+    /** Turnout. Shown even while the per-option counts are hidden. */
     totalVotes: number;
+    /** `polls.closes_at`: when voting ends. Absent means no deadline. */
+    closesAt?: string;
+    /** `polls.results_visibility`. Absent means live, the column default. */
+    resultsVisibility?: "live" | "after_close";
+    /**
+     * True while the tally is being held back: an `after_close` poll that has
+     * not closed yet. The database withholds the counts (they arrive as null
+     * from `poll_option_vote_counts`), so this is what the card renders from.
+     */
+    resultsHidden?: boolean;
     /**
      * The viewer's ballot. For a signed-in viewer it comes from their own
      * `poll_votes` row; for an anonymous one, from the `pv_ballots` marker

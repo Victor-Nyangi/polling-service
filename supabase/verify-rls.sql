@@ -71,7 +71,9 @@
 -- the reactions one FAIL; Victor's 2026-10-20 run on the live database gave the
 -- same. On 2026-10-25 the social features were removed, taking the 19
 -- reactions and reposts checks with them (12 as A, 7 as anon): 132 checks,
--- 132 PASS, 0 FAIL on the same local image.
+-- 132 PASS, 0 FAIL on the same local image. The same day, voting rounds with
+-- results hidden until close (results_visibility) added seven checks: 139
+-- checks, 139 PASS, 0 FAIL.
 --
 -- FIXTURES. Every fixture id comes from pg_temp.id('<key>') and every invite or
 -- ballot hash from pg_temp.h('<key>'). An unknown key raises instead of
@@ -85,6 +87,10 @@
 --               a post with an invite-mode poll, no ballots yet
 --   X_invite1, X_invite2   two unused invites on that poll (hash keys)
 --   X_plain_post           a post with no poll
+--   A_round_post, A_round_poll, A_round_opt1, A_round_opt2
+--               A's voting round: open mode, results hidden until it
+--               closes (results_visibility 'after_close'), closing in a day
+--   B_round_vote           B's signed-in vote on A's round
 --   X_report               X's report of the other user's post
 --   X_notification         a notification addressed to X
 -- Impersonation follows Supabase's documented pattern: `set local role` plus
@@ -139,6 +145,11 @@ begin
     when 'invite_opt1' then '000000000013'
     when 'invite_opt2' then '000000000014'
     when 'plain_post' then '000000000021'
+    when 'round_post' then '000000000051'
+    when 'round_poll' then '000000000052'
+    when 'round_opt1' then '000000000053'
+    when 'round_opt2' then '000000000054'
+    when 'round_vote' then '000000000055'
     when 'report' then '000000000033'
     when 'notification' then '000000000041'
   end;
@@ -326,7 +337,8 @@ insert into public.posts (id, author_id, body) values
   (pg_temp.id('A_plain_post'), pg_temp.id('A'), 'verify-rls: A plain post'),
   (pg_temp.id('B_post'), pg_temp.id('B'), 'verify-rls: B post with an open poll'),
   (pg_temp.id('B_invite_post'), pg_temp.id('B'), 'verify-rls: B post with an invite poll'),
-  (pg_temp.id('B_plain_post'), pg_temp.id('B'), 'verify-rls: B plain post');
+  (pg_temp.id('B_plain_post'), pg_temp.id('B'), 'verify-rls: B plain post'),
+  (pg_temp.id('A_round_post'), pg_temp.id('A'), 'verify-rls: A voting round');
 
 insert into public.polls (id, post_id, question, participation_mode) values
   (pg_temp.id('A_poll'), pg_temp.id('A_post'), 'verify-rls A open?', 'open'),
@@ -343,6 +355,19 @@ insert into public.poll_options (id, poll_id, label, position) values
   (pg_temp.id('B_opt2'), pg_temp.id('B_poll'), 'B two', 2),
   (pg_temp.id('B_invite_opt1'), pg_temp.id('B_invite_poll'), 'B invite one', 1),
   (pg_temp.id('B_invite_opt2'), pg_temp.id('B_invite_poll'), 'B invite two', 2);
+
+-- A's voting round. Inserted on its own because it is the only poll with a
+-- deadline and hidden results.
+insert into public.polls (id, post_id, question, participation_mode, results_visibility, closes_at) values
+  (pg_temp.id('A_round_poll'), pg_temp.id('A_round_post'), 'verify-rls A round?', 'open',
+   'after_close', now() + interval '1 day');
+
+insert into public.poll_options (id, poll_id, label, position) values
+  (pg_temp.id('A_round_opt1'), pg_temp.id('A_round_poll'), 'A round one', 1),
+  (pg_temp.id('A_round_opt2'), pg_temp.id('A_round_poll'), 'A round two', 2);
+
+insert into public.poll_votes (id, poll_id, option_id, voter_id) values
+  (pg_temp.id('B_round_vote'), pg_temp.id('A_round_poll'), pg_temp.id('A_round_opt1'), pg_temp.id('B'));
 
 -- Signed-in votes cross over: A on B's poll, B on A's poll.
 insert into public.poll_votes (id, poll_id, option_id, voter_id) values
@@ -389,7 +414,7 @@ begin
     $q$select 1 from public.profiles where user_id in (pg_temp.id('A'), pg_temp.id('B'))$q$);
   perform pg_temp.expect_read('setup', 'S is a moderator', 'allowed: 1 visible',
     $q$select 1 from public.profiles where user_id = pg_temp.id('S') and role = 'moderator'$q$);
-  perform pg_temp.expect_read('setup', 'posts', 'allowed: 6 visible',
+  perform pg_temp.expect_read('setup', 'posts', 'allowed: 7 visible',
     $q$select 1 from public.posts where author_id in (pg_temp.id('A'), pg_temp.id('B'))$q$);
   perform pg_temp.expect_read('setup', 'polls', 'allowed: 4 visible',
     $q$select 1 from public.polls where id in (pg_temp.id('A_poll'), pg_temp.id('A_invite_poll'), pg_temp.id('B_poll'), pg_temp.id('B_invite_poll'))$q$);
@@ -631,6 +656,26 @@ begin
   -- Tallies are public; they are counts, never ballots.
   perform pg_temp.expect_read('poll_option_vote_counts', 'control: A reads B''s poll tallies', 'allowed: 2 visible',
     $q$select 1 from public.poll_option_vote_counts where poll_id = pg_temp.id('B_poll')$q$);
+
+  -- A voting round with hidden results: not even its owner sees the tally
+  -- before it closes, or can change the rule or the deadline to get at it.
+  perform pg_temp.expect_read('poll_option_vote_counts', 'A reads own open round''s hidden tally', 'denied: 0 visible',
+    $q$select 1 from public.poll_option_vote_counts
+       where poll_id = pg_temp.id('A_round_poll') and votes is not null$q$);
+  perform pg_temp.expect_read('poll_option_vote_counts', 'control: A reads own open round''s turnout', 'allowed: 2 visible',
+    $q$select 1 from public.poll_option_vote_counts
+       where poll_id = pg_temp.id('A_round_poll') and total_votes = 1$q$);
+  perform pg_temp.expect_write('polls', 'A switches own round to live results', 'denied: 42501',
+    $q$update public.polls set results_visibility = 'live' where id = pg_temp.id('A_round_poll')$q$);
+  perform pg_temp.expect_write('polls', 'A moves own round''s deadline into the past', 'denied: 42501',
+    $q$update public.polls set closes_at = now() - interval '1 minute' where id = pg_temp.id('A_round_poll')$q$);
+  perform pg_temp.expect_read('notifications', 'A reads B''s choice on own round from the vote notification', 'denied: 0 visible',
+    $q$select 1 from public.notifications
+       where post_id = pg_temp.id('A_round_post') and type = 'poll_vote' and payload ? 'option_label'$q$);
+  perform pg_temp.expect_read('notifications', 'control: A is told B voted on own round', 'allowed: 1 visible',
+    $q$select 1 from public.notifications
+       where post_id = pg_temp.id('A_round_post') and type = 'poll_vote'
+         and payload ->> 'actor_username' is not null$q$);
 end
 $$;
 
@@ -768,6 +813,9 @@ begin
 
   perform pg_temp.expect_read('poll_option_vote_counts', 'control: anon reads B''s poll tallies', 'allowed: 2 visible',
     $q$select 1 from public.poll_option_vote_counts where poll_id = pg_temp.id('B_poll')$q$);
+  perform pg_temp.expect_read('poll_option_vote_counts', 'anon reads A''s open round''s hidden tally', 'denied: 0 visible',
+    $q$select 1 from public.poll_option_vote_counts
+       where poll_id = pg_temp.id('A_round_poll') and votes is not null$q$);
 end
 $$;
 

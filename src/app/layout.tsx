@@ -20,9 +20,24 @@ const outfit = Outfit({
   weight: ["500", "600", "700"],
 });
 
+const SITE_NAME = "Digital Brand Platform";
+const SITE_TITLE = `${SITE_NAME}: authentic voting rounds`;
+const SITE_DESCRIPTION =
+  "Run staff awards, recognition votes and feedback rounds with one-time invite links, one person one vote, a secret ballot, and results revealed when voting closes.";
+
+/**
+ * The site-wide defaults. `/p/[postId]` and `/u/[username]` replace the title,
+ * description and OpenGraph with their own; every other page inherits these.
+ */
 export const metadata: Metadata = {
-  title: "Digital Brand Platform",
-  description: "A web-first MVP foundation for a poll-centric social platform.",
+  title: SITE_TITLE,
+  description: SITE_DESCRIPTION,
+  openGraph: {
+    title: SITE_TITLE,
+    description: SITE_DESCRIPTION,
+    type: "website",
+    siteName: SITE_NAME,
+  },
 };
 
 /**

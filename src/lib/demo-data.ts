@@ -11,16 +11,18 @@ export const demoCurrentUser: CurrentUser = {
   email: "creator@example.com",
   username: "creator",
   displayName: "Victor Creator",
-  bio: "Testing the first MVP loop for poll-based social posts.",
+  bio: "Running staff awards and feedback rounds where every vote is one person.",
   interests: ["tech", "branding", "community"],
   role: "admin",
 };
 
+const DAY = 1000 * 60 * 60 * 24;
+
 export const demoFeedPosts: FeedPost[] = [
   {
     id: "post-1",
-    body: "What should the first public release focus on?",
-    hashtags: ["mvp", "product", "strategy"],
+    body: "One invite link per person. Results are revealed when voting closes.",
+    hashtags: ["awards"],
     createdAt: new Date(Date.now() - 1000 * 60 * 45).toISOString(),
     author: {
       id: "demo-user-1",
@@ -30,14 +32,17 @@ export const demoFeedPosts: FeedPost[] = [
     },
     poll: {
       id: "poll-1",
-      question: "Which launch slice matters most?",
+      question: "Colleague of the year 2026",
       status: "active",
-      totalVotes: 41,
-      viewerVoteOptionId: "poll-1-option-1",
+      participationMode: "invite",
+      resultsVisibility: "after_close",
+      resultsHidden: true,
+      closesAt: new Date(Date.now() + 3 * DAY).toISOString(),
+      totalVotes: 14,
       options: [
-        { id: "poll-1-option-1", label: "Auth + onboarding", position: 1, votes: 18 },
-        { id: "poll-1-option-2", label: "Feed + voting", position: 2, votes: 17 },
-        { id: "poll-1-option-3", label: "Moderation basics", position: 3, votes: 6 },
+        { id: "poll-1-option-1", label: "Amina Otieno", position: 1, votes: 0 },
+        { id: "poll-1-option-2", label: "Brian Kamau", position: 2, votes: 0 },
+        { id: "poll-1-option-3", label: "Wanjiru Mwangi", position: 3, votes: 0 },
       ],
     },
   },
@@ -64,6 +69,33 @@ export const demoFeedPosts: FeedPost[] = [
       ],
     },
   },
+  {
+    id: "post-3",
+    body: "Anonymous feedback on the Q3 offsite. Closed, so the results are in.",
+    hashtags: ["feedback"],
+    createdAt: new Date(Date.now() - 9 * DAY).toISOString(),
+    author: {
+      id: "demo-user-1",
+      username: "creator",
+      displayName: "Victor Creator",
+      role: "admin",
+    },
+    poll: {
+      id: "poll-3",
+      question: "How useful was the Q3 offsite?",
+      status: "closed",
+      participationMode: "invite",
+      resultsVisibility: "after_close",
+      resultsHidden: false,
+      closesAt: new Date(Date.now() - 2 * DAY).toISOString(),
+      totalVotes: 19,
+      options: [
+        { id: "poll-3-option-1", label: "Very useful", position: 1, votes: 8 },
+        { id: "poll-3-option-2", label: "Somewhat useful", position: 2, votes: 9 },
+        { id: "poll-3-option-3", label: "Not useful", position: 3, votes: 2 },
+      ],
+    },
+  },
 ];
 
 /**
@@ -75,7 +107,7 @@ export const demoProfiles: PublicProfile[] = [
     id: "demo-user-1",
     username: "creator",
     displayName: "Victor Creator",
-    bio: "Testing the first MVP loop for poll-based social posts.",
+    bio: "Running staff awards and feedback rounds where every vote is one person.",
     role: "admin",
     joinedAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 42).toISOString(),
   },

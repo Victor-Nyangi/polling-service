@@ -1,7 +1,11 @@
 import Link from "next/link";
 import { createReportAction, voteOnPollAction } from "@/app/actions";
 import { INVITE_PARAM, type InviteParam, pollVoteAccess } from "@/lib/invite";
-import { voteCountLabel } from "@/lib/poll-labels";
+import {
+  HIDDEN_RESULTS_LABEL,
+  deadlineLabel,
+  voteCountLabel,
+} from "@/lib/poll-labels";
 import type { FeedPost } from "@/lib/types";
 
 function formatDate(isoTimestamp: string) {
@@ -19,7 +23,11 @@ function votePercentage(post: FeedPost, optionVotes: number) {
   return Math.round((optionVotes / post.poll.totalVotes) * 100);
 }
 
-function inviteOnlyNote(invite: InviteParam, hasVoted: boolean) {
+function readOnlyNote(post: FeedPost, invite: InviteParam, hasVoted: boolean) {
+  if (post.poll.status === "closed") {
+    return hasVoted ? "Your vote is in. Voting has closed." : "Voting has closed.";
+  }
+
   if (invite.kind === "malformed") {
     return "This invite link isn't valid for this poll.";
   }
@@ -41,6 +49,11 @@ function inviteOnlyNote(invite: InviteParam, hasVoted: boolean) {
  * vote goes through `cast_anonymous_vote` whoever is signed in; without one
  * the poll is results only, for everyone, since any other ballot on it is
  * refused (PV004 anonymous, PV006 signed in).
+ *
+ * A closed poll is results only for everyone, whatever its mode: the vote
+ * trigger refuses a ballot after the deadline, so a button would only fail.
+ * While a round hides its results, each option shows its label and no count;
+ * the counts are not on the page to hide, because the database withheld them.
  */
 export function PollCard({
   post,
@@ -51,7 +64,11 @@ export function PollCard({
   redirectTo?: string;
   invite?: InviteParam;
 }) {
-  const access = pollVoteAccess(post.poll.participationMode, invite);
+  const access =
+    post.poll.status === "closed"
+      ? "read-only"
+      : pollVoteAccess(post.poll.participationMode, invite);
+  const deadline = post.poll.closesAt ? deadlineLabel(post.poll.closesAt) : null;
   const permalink = `/p/${post.id}`;
 
   return (
@@ -99,8 +116,10 @@ export function PollCard({
         </h3>
         {access === "read-only" ? (
           <p className="mt-2 text-sm text-muted">
-            {inviteOnlyNote(invite, Boolean(post.poll.viewerVoteOptionId))}
-            {post.poll.viewerIsAuthor && redirectTo !== permalink ? (
+            {readOnlyNote(post, invite, Boolean(post.poll.viewerVoteOptionId))}
+            {post.poll.status !== "closed" &&
+            post.poll.viewerIsAuthor &&
+            redirectTo !== permalink ? (
               <>
                 {" "}
                 <Link href={permalink} className="text-accent transition hover:underline">
@@ -110,15 +129,35 @@ export function PollCard({
             ) : null}
           </p>
         ) : null}
+        {deadline || post.poll.resultsHidden ? (
+          <p className="mt-2 font-mono text-xs uppercase tracking-wide text-muted">
+            {[
+              deadline
+                ? `${post.poll.status === "closed" ? "Closed" : "Closes"} ${deadline}`
+                : null,
+              post.poll.resultsHidden
+                ? `${HIDDEN_RESULTS_LABEL} · ${voteCountLabel(post.poll.totalVotes)} so far`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </p>
+        ) : null}
         <div className="mt-4 grid gap-3">
           {post.poll.options.map((option) => {
             const isSelected = post.poll.viewerVoteOptionId === option.id;
             const tally = (
               <div className="flex items-center justify-between gap-4">
                 <span>{option.label}</span>
-                <span className="font-mono text-sm text-muted">
-                  {voteCountLabel(option.votes)} · {votePercentage(post, option.votes)}%
-                </span>
+                {post.poll.resultsHidden ? (
+                  isSelected ? (
+                    <span className="font-mono text-sm text-muted">Your vote</span>
+                  ) : null
+                ) : (
+                  <span className="font-mono text-sm text-muted">
+                    {voteCountLabel(option.votes)} · {votePercentage(post, option.votes)}%
+                  </span>
+                )}
               </div>
             );
 
