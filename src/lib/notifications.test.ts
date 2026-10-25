@@ -59,6 +59,30 @@ describe("renderNotification", () => {
     }
   });
 
+  it("names the voter but not the choice on a round with hidden results", () => {
+    expect(
+      renderNotification("poll_vote", {
+        actor_username: "ada",
+        question: "Colleague of the year?",
+        results_hidden: true,
+      }),
+    ).toEqual({
+      title: "New vote on your poll",
+      body: '@ada voted on "Colleague of the year?".',
+    });
+  });
+
+  it("ignores a results_hidden flag that is not literally true", () => {
+    expect(
+      renderNotification("poll_vote", {
+        actor_username: "ada",
+        option_label: "Yes",
+        question: "Q?",
+        results_hidden: "true",
+      }).body,
+    ).toBe('@ada voted "Yes" on "Q?".');
+  });
+
   it("renders a reviewed report, defaulting the status to reviewed", () => {
     expect(renderNotification("report_reviewed", { status: "closed" }).body).toBe(
       "A moderator marked your report as closed.",

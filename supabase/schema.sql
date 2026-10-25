@@ -59,6 +59,47 @@ begin
 end
 $$;
 
+-- Whether a poll's tally shows while voting is open. 'live', the default and
+-- what every existing poll keeps, shows it as ballots arrive. 'after_close'
+-- is the secret ballot of an awards round or a recognition vote: the
+-- per-option counts are hidden from everyone, the poll's owner included,
+-- until the poll closes. A running tally steers the ballots still to come,
+-- and an owner watching it while one known invite gets used could read that
+-- person's vote (the residual risk accepted when invite mode was designed).
+-- Turnout stays visible. The hiding happens in poll_option_vote_counts below,
+-- not in the app, so the public anon key cannot read round the page.
+--
+-- A hidden tally needs a closing time, or it would never show: nothing in the
+-- app closes a poll by hand. Both columns are fixed once the poll exists,
+-- because the polls UPDATE grant further down covers participation_mode only,
+-- so an owner cannot flip a round to live mid-vote or move its deadline.
+alter table public.polls
+  add column if not exists results_visibility text not null default 'live';
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'polls_results_visibility_check'
+  ) then
+    alter table public.polls
+      add constraint polls_results_visibility_check
+      check (results_visibility in ('live', 'after_close'));
+  end if;
+
+  if not exists (
+    select 1
+    from pg_constraint
+    where conname = 'polls_hidden_results_need_close_check'
+  ) then
+    alter table public.polls
+      add constraint polls_hidden_results_need_close_check
+      check (results_visibility = 'live' or closes_at is not null);
+  end if;
+end
+$$;
+
 create table if not exists public.poll_options (
   id uuid primary key default gen_random_uuid(),
   poll_id uuid not null references public.polls (id) on delete cascade,
@@ -313,16 +354,30 @@ create unique index if not exists notifications_poll_responses_dedupe_idx
 -- view runs as its owner and so bypasses the row-level policy on poll_votes,
 -- exposing totals without ever exposing voter_id. This is what lets results be
 -- public while ballots stay secret.
+--
+-- `votes` is null while a poll with results_visibility = 'after_close' is
+-- still open: the secret-ballot round. It reappears the moment the poll
+-- closes, by status or by passing closes_at, judged the same way
+-- enforce_poll_accepts_votes() judges it (strictly after the deadline).
+-- `total_votes` is the poll's turnout and always shows: it says how many
+-- voted, never how.
 drop view if exists public.poll_option_vote_counts;
 create view public.poll_option_vote_counts
 with (security_invoker = false) as
 select
   po.poll_id,
   po.id as option_id,
-  count(pv.id) as votes
+  case
+    when pl.results_visibility = 'live'
+      or pl.status = 'closed'
+      or (pl.closes_at is not null and now() > pl.closes_at)
+    then count(pv.id)
+  end as votes,
+  (sum(count(pv.id)) over (partition by po.poll_id))::bigint as total_votes
 from public.poll_options as po
+join public.polls as pl on pl.id = po.poll_id
 left join public.poll_votes as pv on pv.option_id = po.id
-group by po.poll_id, po.id;
+group by po.poll_id, po.id, pl.results_visibility, pl.status, pl.closes_at;
 
 -- What the legacy default privileges gave this view, stated outright (see the
 -- table grants above). Only select matters: the view aggregates, so Postgres
@@ -577,6 +632,7 @@ declare
   poll_question text;
   chosen_label text;
   actor_name text;
+  hides_results boolean;
 begin
   -- An anonymous ballot has no actor: no profile to name, and actor_id null
   -- slips past the notifications_engagement_dedupe_idx because nulls never
@@ -587,8 +643,8 @@ begin
     return new;
   end if;
 
-  select p.id, p.author_id, pl.question
-    into target_post, target_author, poll_question
+  select p.id, p.author_id, pl.question, pl.results_visibility = 'after_close'
+    into target_post, target_author, poll_question, hides_results
   from public.polls as pl
   join public.posts as p on p.id = pl.post_id
   where pl.id = new.poll_id;
@@ -597,11 +653,31 @@ begin
     return new;
   end if;
 
-  select po.label into chosen_label
-  from public.poll_options as po where po.id = new.option_id;
-
   select pr.username into actor_name
   from public.profiles as pr where pr.user_id = new.voter_id;
+
+  -- A poll whose results are hidden until it closes must not hand its owner
+  -- each named voter's choice in the inbox instead: the owner hears who voted,
+  -- never how. A notification never changes once written, so the label stays
+  -- out even after the poll closes. (Invite ballots never reach this trigger:
+  -- they carry no voter_id.)
+  if hides_results then
+    insert into public.notifications (recipient_id, actor_id, post_id, type, payload)
+    values (
+      target_author, new.voter_id, target_post, 'poll_vote',
+      jsonb_build_object(
+        'actor_username', actor_name,
+        'question', poll_question,
+        'results_hidden', true
+      )
+    )
+    on conflict do nothing;
+
+    return new;
+  end if;
+
+  select po.label into chosen_label
+  from public.poll_options as po where po.id = new.option_id;
 
   insert into public.notifications (recipient_id, actor_id, post_id, type, payload)
   values (

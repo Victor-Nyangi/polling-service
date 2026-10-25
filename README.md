@@ -1,8 +1,29 @@
 # Digital Brand Platform
 
-A web-first MVP foundation for a poll-centric social platform. The project is
-designed to validate the core loop first, then expand into richer discovery,
-analytics, privacy controls, messaging, and multilingual support.
+Authentic voting rounds: staff awards, recognition votes and feedback rounds,
+where one person, one vote and a secret ballot are the point.
+
+## Positioning
+
+Most poll tools count clicks. This one is for the votes where the count has to
+be defensible:
+
+- **One person, one vote.** An invite-only poll accepts a ballot only through a
+  one-time invite link, and the database refuses a second ballot from the same
+  link and any signed-in ballot that skips the invite.
+- **A secret ballot.** The owner sees turnout (which links were used, how many
+  voted) and the tally, never who chose what. Only token hashes are stored.
+- **Results when voting ends.** A round can hide its per-option counts from
+  everyone, its owner included, until the closing time, so early votes can't
+  steer late ones. The database withholds them, not just the page.
+- **A real deadline.** Voting stops at `closes_at`, enforced by a trigger,
+  whichever path the ballot takes.
+- **Voters need no account.** Only the person running the round signs in.
+
+The composer opens on the **Awards / voting round** preset (invite-only,
+results after close, closes in a week). **Quick poll** (`/?preset=quick`) keeps
+the open, live-results poll that anyone with the link can answer. Every setting
+can be changed under either preset.
 
 ## Stack
 
@@ -64,7 +85,7 @@ All four checks run on every pull request via `.github/workflows/ci.yml`.
 
 ## Current implemented routes
 
-- `/` — recent polls, MVP overview, and poll composer
+- `/` — recent polls, how a voting round works, and the poll composer (opens on the Awards / voting round preset; `/?preset=quick` for a quick poll)
 - `/p/[postId]` — public permalink for one poll post (works signed-out); its author also gets the Open / Invite-only switch, invite issuing, and turnout
 - `/p/[postId]?invite=<token>` — an invite link: votes on an invite-only poll, signed in or not, then redirects to the bare permalink
 - `/u/[username]` — public profile and that account's polls (works signed-out)
@@ -181,6 +202,16 @@ notification triggers, and session persistence are all working together.
   2026-10-15: report and post `created_at` pinned, posts' UPDATE grant revoked,
   staff limited to a report's moderation columns, every grant stated outright)
   were pasted on 2026-10-20, giving 151 checks, 150 PASS, 1 FAIL.
+- **Pending re-paste (2026-10-25, voting rounds; apply after the social-features
+  removal above, both are in the same `schema.sql`)**: adds
+  `polls.results_visibility` (`live`, the default for every existing poll, or
+  `after_close`), with a check that `after_close` has a `closes_at`.
+  `poll_option_vote_counts` now returns a null `votes` for an `after_close`
+  poll that hasn't closed yet, plus a `total_votes` turnout column. On such a
+  poll, `notify_poll_vote()` leaves the choice out of the owner's notification.
+  This deletes nothing, and existing polls behave exactly as before. After
+  pasting: `verify.sql` passes and `verify-rls.sql` gives **139 checks,
+  139 PASS, 0 FAIL**.
 - **Preview deployments**: Vercel builds every pull request. They share the
   production database unless you point Preview at a separate Supabase project.
 - **Environments**: keep `development` and `production` only. Add staging when

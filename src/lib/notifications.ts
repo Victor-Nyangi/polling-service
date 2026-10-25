@@ -9,6 +9,18 @@ export function renderNotification(
 
   switch (type) {
     case "poll_vote": {
+      // A round with results hidden until close sends no option_label: the
+      // notify_poll_vote() trigger tells the owner who voted, never how.
+      if (payload.results_hidden === true) {
+        const question =
+          typeof payload.question === "string" ? payload.question : "your poll";
+
+        return {
+          title: "New vote on your poll",
+          body: `${actor} voted on "${question}".`,
+        };
+      }
+
       const option =
         typeof payload.option_label === "string"
           ? payload.option_label

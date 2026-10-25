@@ -9,6 +9,8 @@ import {
 } from "@/lib/anonymous-vote";
 import { hasSupabasePublicEnv } from "@/lib/env";
 import { needsOnboarding } from "@/lib/onboarding";
+import { resultsVisibilityOf } from "@/lib/poll-presets";
+import { isPollClosed } from "@/lib/poll-status";
 import {
   demoCurrentUser,
   demoFeedPosts,
@@ -64,7 +66,9 @@ const POST_SELECT = `
           id,
           question,
           status,
+          closes_at,
           participation_mode,
+          results_visibility,
           poll_options ( id, label, position ),
           poll_votes ( option_id )
         )
@@ -107,7 +111,7 @@ async function resolveViewer(currentUser: CurrentUser | null): Promise<Viewer> {
 function mapFeedPost(
   row: Record<string, unknown>,
   viewer: Viewer,
-  voteCounts: Map<string, number>,
+  voteCounts: VoteCounts,
 ): FeedPost | null {
   const viewerId = viewer.id;
   // `polls.post_id` is `not null unique`, so PostgREST proves this embed is
@@ -124,16 +128,25 @@ function mapFeedPost(
   // RLS restricts poll_votes to the viewer's own rows, so this is their vote
   // and nobody else's. Tallies come from the aggregate view instead.
   const viewerVote = voteRows[0];
+  // A null count is the view withholding a hidden tally; an option missing
+  // from the view altogether (no row yet) is simply unvoted.
+  const resultsHidden = optionRows.some(
+    (option) => voteCounts.options.get(String(option.id)) === null,
+  );
   const options: PollOption[] = optionRows
     .map((option) => ({
       id: String(option.id),
       label: String(option.label ?? "Untitled option"),
       position: Number(option.position ?? 0),
-      votes: voteCounts.get(String(option.id)) ?? 0,
+      votes: voteCounts.options.get(String(option.id)) ?? 0,
     }))
     .sort((left, right) => left.position - right.position);
-  const totalVotes = options.reduce((sum, option) => sum + option.votes, 0);
   const pollId = String(pollRow.id);
+  const totalVotes =
+    voteCounts.totals.get(pollId) ??
+    options.reduce((sum, option) => sum + option.votes, 0);
+  const closesAt =
+    typeof pollRow.closes_at === "string" ? pollRow.closes_at : undefined;
   const participationMode = participationModeOf(pollRow.participation_mode);
   const author = formatProfile(firstEmbedded(row.author));
   // A token ballot (anonymous, or any invite ballot) has no poll_votes row its
@@ -165,9 +178,14 @@ function mapFeedPost(
     poll: {
       id: pollId,
       question: String(pollRow.question ?? "Untitled poll"),
-      status: pollRow.status === "closed" ? "closed" : "active",
+      status: isPollClosed({ status: String(pollRow.status ?? ""), closesAt })
+        ? "closed"
+        : "active",
       options,
       totalVotes,
+      closesAt,
+      resultsVisibility: resultsVisibilityOf(pollRow.results_visibility),
+      resultsHidden,
       viewerVoteOptionId,
       participationMode,
       viewerIsAnonymous: viewerId === undefined,
@@ -177,9 +195,19 @@ function mapFeedPost(
 }
 
 /**
+ * Per-option counts keyed by option id, `null` where the view withholds a
+ * hidden tally, and each poll's turnout keyed by poll id.
+ */
+type VoteCounts = {
+  options: Map<string, number | null>;
+  totals: Map<string, number>;
+};
+
+/**
  * Tallies for every poll embedded in `rows`, read from the
  * `poll_option_vote_counts` view (which is `security_invoker = false`, so totals
- * are public while `poll_votes.voter_id` stays private).
+ * are public while `poll_votes.voter_id` stays private, and which returns a
+ * null count for a round whose results are hidden until it closes).
  *
  * Returns `null` on a query failure so callers can report an outage instead of
  * rendering every poll as zero votes.
@@ -187,8 +215,8 @@ function mapFeedPost(
 async function loadVoteCounts(
   supabase: ServerClient,
   rows: Array<Record<string, unknown>>,
-): Promise<Map<string, number> | null> {
-  const voteCounts = new Map<string, number>();
+): Promise<VoteCounts | null> {
+  const voteCounts: VoteCounts = { options: new Map(), totals: new Map() };
   const pollIds = rows
     .flatMap((row) => embeddedRows(row.poll))
     .map((poll) => String(poll.id ?? ""))
@@ -200,7 +228,7 @@ async function loadVoteCounts(
 
   const { data: countRows, error } = await supabase
     .from("poll_option_vote_counts")
-    .select("option_id, votes")
+    .select("poll_id, option_id, votes, total_votes")
     .in("poll_id", pollIds);
 
   if (error) {
@@ -208,7 +236,13 @@ async function loadVoteCounts(
   }
 
   for (const countRow of countRows ?? []) {
-    voteCounts.set(String(countRow.option_id), Number(countRow.votes ?? 0));
+    voteCounts.options.set(
+      String(countRow.option_id),
+      countRow.votes === null || countRow.votes === undefined
+        ? null
+        : Number(countRow.votes),
+    );
+    voteCounts.totals.set(String(countRow.poll_id), Number(countRow.total_votes ?? 0));
   }
 
   return voteCounts;

@@ -95,7 +95,7 @@ export async function AppShell({
               Digital Brand Platform
             </Link>
             <p className="text-sm text-muted max-md:hidden">
-              Poll-first social MVP for a hobby-scale launch.
+              Authentic voting rounds: one person, one vote, secret ballot.
             </p>
           </div>
 
@@ -162,7 +162,7 @@ export async function AppShell({
                   {/* The short label keeps the phone row to one line next to
                       the theme toggle. */}
                   <span className="md:hidden">Join</span>
-                  <span className="max-md:hidden">Start building</span>
+                  <span className="max-md:hidden">Run a voting round</span>
                 </Link>
               </div>
             )}
@@ -174,7 +174,7 @@ export async function AppShell({
         {demoMode ? (
           <div className="rounded-2xl border border-dashed border-border bg-card px-4 py-3 text-sm text-muted">
             Demo mode is active. Connect Supabase in <code>.env.local</code> to
-            enable persistent auth, feed, notifications, and moderation data.
+            enable persistent auth, polls, notifications, and moderation data.
           </div>
         ) : null}
         {currentUser?.needsOnboarding ? (

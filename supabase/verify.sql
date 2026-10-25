@@ -21,6 +21,10 @@ declare
   v_option_a uuid;
   v_option_b uuid;
   v_report uuid;
+  v_round_post uuid;
+  v_round_poll uuid;
+  v_round_a uuid;
+  v_round_b uuid;
 begin
   ----------------------------------------------------------------------------
   -- Profile bootstrap
@@ -541,6 +545,83 @@ begin
   perform set_config('role', 'none', true);
   if exists (select 1 from public.poll_participants where poll_id = v_invite_poll) then
     raise exception 'deleting the poll should cascade to its invites, used or not';
+  end if;
+
+  ----------------------------------------------------------------------------
+  -- Hidden results: a voting round's tally stays secret until it closes
+  ----------------------------------------------------------------------------
+  insert into public.posts (author_id, body)
+  values (v_author, 'verify round')
+  returning id into v_round_post;
+
+  -- Nothing closes a poll by hand, so a hidden tally with no deadline would
+  -- never show.
+  begin
+    insert into public.polls (post_id, question, results_visibility)
+    values (v_round_post, 'Never closes?', 'after_close');
+    raise exception 'expected hidden results without a closing time to be refused';
+  exception when check_violation then null;
+  end;
+
+  insert into public.polls (post_id, question, results_visibility, closes_at)
+  values (v_round_post, 'Colleague of the year?', 'after_close', now() + interval '1 day')
+  returning id into v_round_poll;
+
+  insert into public.poll_options (poll_id, label, position)
+  values (v_round_poll, 'Round A', 1) returning id into v_round_a;
+
+  insert into public.poll_options (poll_id, label, position)
+  values (v_round_poll, 'Round B', 2) returning id into v_round_b;
+
+  insert into public.poll_votes (poll_id, option_id, voter_id)
+  values (v_round_poll, v_round_a, v_voter);
+
+  if exists (
+    select 1 from public.poll_option_vote_counts
+    where poll_id = v_round_poll and votes is not null
+  ) then
+    raise exception 'expected an open after_close round to hide its per-option counts';
+  end if;
+
+  if (select count(*) from public.poll_option_vote_counts
+      where poll_id = v_round_poll and total_votes = 1) <> 2 then
+    raise exception 'expected an open after_close round to still show its turnout of 1';
+  end if;
+
+  if not exists (
+    select 1 from public.notifications
+    where recipient_id = v_author
+      and post_id = v_round_post
+      and type = 'poll_vote'
+      and payload ->> 'results_hidden' = 'true'
+      and not (payload ? 'option_label')
+  ) then
+    raise exception 'expected the round''s vote notification to name the voter but not the choice';
+  end if;
+
+  if exists (
+    select 1
+    from information_schema.column_privileges
+    where table_schema = 'public'
+      and table_name = 'polls'
+      and grantee in ('anon', 'authenticated')
+      and privilege_type = 'UPDATE'
+      and column_name in ('results_visibility', 'closes_at')
+  ) then
+    raise exception 'an owner must not be able to change results_visibility or closes_at';
+  end if;
+
+  -- Past the deadline, the tally appears. now() is fixed for the transaction,
+  -- so a deadline a second before it has passed for the view as well.
+  update public.polls
+     set closes_at = now() - interval '1 second'
+   where id = v_round_poll;
+
+  select votes into v_count
+  from public.poll_option_vote_counts
+  where option_id = v_round_a;
+  if v_count is distinct from 1 then
+    raise exception 'expected a closed round to show its tally of 1, got %', v_count;
   end if;
 
   raise notice 'verify.sql: all assertions passed';

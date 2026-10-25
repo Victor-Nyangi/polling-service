@@ -30,6 +30,7 @@ import {
 } from "@/lib/invite";
 import { buildNoticeHref } from "@/lib/notice";
 import { ONBOARDING_REQUIRED_MESSAGE, needsOnboarding } from "@/lib/onboarding";
+import { parseRoundSettings } from "@/lib/poll-presets";
 import { isPollClosed } from "@/lib/poll-status";
 import { safeRedirectPath } from "@/lib/redirect";
 import { isStaffRole } from "@/lib/roles";
@@ -324,6 +325,12 @@ export async function createPollPostAction(formData: FormData) {
   const options = ["option1", "option2", "option3", "option4"]
     .map((name) => stringValue(formData, name))
     .filter(Boolean);
+  // polls_hidden_results_need_close_check is the guarantee that hidden
+  // results come with a deadline; this words the refusal before any insert.
+  const round = parseRoundSettings({
+    resultsVisibility: stringValue(formData, "resultsVisibility"),
+    closesIn: stringValue(formData, "closesIn"),
+  });
 
   if (!question || options.length < 2) {
     await redirectWithNotice(
@@ -331,6 +338,11 @@ export async function createPollPostAction(formData: FormData) {
       "error",
       "Provide a question and at least two poll options.",
     );
+  }
+
+  if (!round.ok) {
+    await redirectWithNotice(redirectTo, "error", round.message);
+    throw new Error("Round settings missing after redirect guard.");
   }
 
   const { supabase, user } = await requireAuthenticatedUser(redirectTo);
@@ -368,6 +380,8 @@ export async function createPollPostAction(formData: FormData) {
       post_id: post.id,
       question,
       participation_mode: participationMode,
+      results_visibility: round.resultsVisibility,
+      closes_at: round.closesAt,
     })
     .select("id")
     .single();
