@@ -2,15 +2,17 @@
 
 import { useActionState, useEffect, useState } from "react";
 import { issuePollInvitesAction } from "@/app/actions";
+import { SubmitButton } from "@/components/submit-button";
 import {
   type IssueInvitesResult,
   MAX_INVITES_PER_BATCH,
   parseInviteLabels,
 } from "@/lib/invite";
+import { PENDING_LABELS } from "@/lib/pending";
 
 /**
- * The only Client Component in the app, and the reason it is one: the links
- * a batch of invites produces may be shown exactly once.
+ * A Client Component because the links a batch of invites produces may be
+ * shown exactly once.
  *
  * They arrive as this component's action state, in the response to the POST
  * that issued them, and live only in this component's memory. Nothing writes
@@ -172,6 +174,7 @@ export function InviteIssuer({
             name="labels"
             rows={5}
             value={text}
+            readOnly={pending}
             onChange={(event) => setText(event.target.value)}
             placeholder={"Ada Lovelace\nGrace Hopper"}
             className="rounded-2xl border border-border bg-background px-4 py-3 outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/15"
@@ -193,13 +196,12 @@ export function InviteIssuer({
           </p>
         ) : null}
         <div>
-          <button
-            type="submit"
-            disabled={pending}
-            className="rounded-full bg-accent-strong px-5 py-3 text-sm font-medium text-white transition hover:brightness-95 active:scale-[0.98] disabled:opacity-60"
+          <SubmitButton
+            pendingLabel={PENDING_LABELS.issueInvites}
+            className="rounded-full bg-accent-strong px-5 py-3 text-sm font-medium text-white transition enabled:hover:brightness-95 enabled:active:scale-[0.98]"
           >
-            {pending ? "Issuing..." : "Issue invite links"}
-          </button>
+            Issue invite links
+          </SubmitButton>
         </div>
       </form>
     </div>

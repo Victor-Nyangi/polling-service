@@ -4,6 +4,8 @@ import { NoticeBanner } from "@/components/notice-banner";
 import { readNotice } from "@/lib/notice";
 import { getCurrentUser } from "@/lib/server/platform";
 import { signInAction, signInWithGoogleAction } from "@/app/actions";
+import { SubmitButton } from "@/components/submit-button";
+import { PENDING_LABELS } from "@/lib/pending";
 
 export const dynamic = "force-dynamic";
 
@@ -47,15 +49,21 @@ export default async function LoginPage({
             className="rounded-2xl border border-border bg-background px-4 py-3 outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/15"
             required
           />
-          <button className="rounded-full bg-accent-strong px-5 py-3 font-medium text-white transition hover:brightness-95 active:scale-[0.98]">
+          <SubmitButton
+            pendingLabel={PENDING_LABELS.signIn}
+            className="rounded-full bg-accent-strong px-5 py-3 font-medium text-white transition enabled:hover:brightness-95 enabled:active:scale-[0.98]"
+          >
             Sign in
-          </button>
+          </SubmitButton>
         </form>
 
         <form action={signInWithGoogleAction} className="mt-3">
-          <button className="w-full rounded-full border border-border px-5 py-3 font-medium transition active:scale-[0.98]">
+          <SubmitButton
+            pendingLabel={PENDING_LABELS.signInWithGoogle}
+            className="w-full rounded-full border border-border px-5 py-3 font-medium transition enabled:active:scale-[0.98]"
+          >
             Continue with Google
-          </button>
+          </SubmitButton>
         </form>
 
         <p className="mt-6 text-sm text-muted">

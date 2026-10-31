@@ -5,6 +5,8 @@ import { LoadError } from "@/components/load-error";
 import { NoticeBanner } from "@/components/notice-banner";
 import { readNotice } from "@/lib/notice";
 import { getCurrentUser, getModerationReports } from "@/lib/server/platform";
+import { PendingGroup, SubmitButton } from "@/components/submit-button";
+import { PENDING_LABELS } from "@/lib/pending";
 
 export const dynamic = "force-dynamic";
 
@@ -73,25 +75,31 @@ export default async function ModerationPage({
                 <p className="font-mono text-xs text-muted">
                   {timestamp(report.createdAt)}
                 </p>
-                <div className="flex gap-3">
+                <PendingGroup className="flex gap-3">
                   <form action={reviewReportAction}>
                     <input type="hidden" name="redirectTo" value="/moderation" />
                     <input type="hidden" name="reportId" value={report.id} />
                     <input type="hidden" name="status" value="reviewed" />
-                    <button className="rounded-full border border-border px-4 py-2 text-sm font-medium transition active:scale-[0.97]">
+                    <SubmitButton
+                      pendingLabel={PENDING_LABELS.markReviewed}
+                      className="rounded-full border border-border px-4 py-2 text-sm font-medium transition enabled:active:scale-[0.97]"
+                    >
                       Mark reviewed
-                    </button>
+                    </SubmitButton>
                   </form>
 
                   <form action={reviewReportAction}>
                     <input type="hidden" name="redirectTo" value="/moderation" />
                     <input type="hidden" name="reportId" value={report.id} />
                     <input type="hidden" name="status" value="closed" />
-                    <button className="rounded-full bg-accent-strong px-4 py-2 text-sm font-medium text-white transition hover:brightness-95 active:scale-[0.97]">
+                    <SubmitButton
+                      pendingLabel={PENDING_LABELS.closeReport}
+                      className="rounded-full bg-accent-strong px-4 py-2 text-sm font-medium text-white transition enabled:hover:brightness-95 enabled:active:scale-[0.97]"
+                    >
                       Close report
-                    </button>
+                    </SubmitButton>
                   </form>
-                </div>
+                </PendingGroup>
               </div>
             </article>
           ))}

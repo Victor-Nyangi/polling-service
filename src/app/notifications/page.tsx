@@ -5,6 +5,8 @@ import { LoadError } from "@/components/load-error";
 import { NoticeBanner } from "@/components/notice-banner";
 import { readNotice } from "@/lib/notice";
 import { getCurrentUser, getNotifications } from "@/lib/server/platform";
+import { SubmitButton } from "@/components/submit-button";
+import { PENDING_LABELS } from "@/lib/pending";
 
 export const dynamic = "force-dynamic";
 
@@ -77,9 +79,12 @@ export default async function NotificationsPage({
                       name="notificationId"
                       value={notification.id}
                     />
-                    <button className="rounded-full border border-border px-4 py-2 text-sm font-medium transition active:scale-[0.97]">
+                    <SubmitButton
+                      pendingLabel={PENDING_LABELS.markRead}
+                      className="rounded-full border border-border px-4 py-2 text-sm font-medium transition enabled:active:scale-[0.97]"
+                    >
                       Mark as read
-                    </button>
+                    </SubmitButton>
                   </form>
                 ) : null}
               </div>

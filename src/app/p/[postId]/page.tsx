@@ -21,6 +21,8 @@ import {
   getPostById,
 } from "@/lib/server/platform";
 import type { FeedPost } from "@/lib/types";
+import { SubmitButton } from "@/components/submit-button";
+import { PENDING_LABELS } from "@/lib/pending";
 
 export const dynamic = "force-dynamic";
 
@@ -210,9 +212,16 @@ async function OwnerPanel({
               name="mode"
               value={mode === "invite" ? "open" : "invite"}
             />
-            <button className="rounded-full border border-border px-4 py-2 text-sm font-medium transition hover:border-accent/50 active:scale-[0.97]">
+            <SubmitButton
+              pendingLabel={
+                mode === "invite"
+                  ? PENDING_LABELS.openPoll
+                  : PENDING_LABELS.restrictPoll
+              }
+              className="rounded-full border border-border px-4 py-2 text-sm font-medium transition enabled:hover:border-accent/50 enabled:active:scale-[0.97]"
+            >
               {mode === "invite" ? "Open it to anyone" : "Make it invite-only"}
-            </button>
+            </SubmitButton>
           </form>
         ) : null}
       </div>
@@ -279,9 +288,13 @@ async function OwnerPanel({
                             name="tokenHash"
                             value={invite.tokenHash}
                           />
-                          <button className="rounded-full border border-border px-3 py-1 text-sm transition hover:border-accent/50 active:scale-[0.96]">
+                          <SubmitButton
+                            pendingLabel={PENDING_LABELS.revokeInvite}
+                            aria-label={`Revoke the invite for ${invite.label ?? "an unnamed invite"}`}
+                            className="rounded-full border border-border px-3 py-1 text-sm transition enabled:hover:border-accent/50 enabled:active:scale-[0.96]"
+                          >
                             Revoke
-                          </button>
+                          </SubmitButton>
                         </form>
                       )}
                     </div>

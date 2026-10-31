@@ -3,6 +3,8 @@ import { NoticeBanner } from "@/components/notice-banner";
 import { readNotice } from "@/lib/notice";
 import { getCurrentUser } from "@/lib/server/platform";
 import { updateProfileAction } from "@/app/actions";
+import { SubmitButton } from "@/components/submit-button";
+import { PENDING_LABELS } from "@/lib/pending";
 
 export const dynamic = "force-dynamic";
 
@@ -61,9 +63,12 @@ export default async function OnboardingPage({
               defaultValue={currentUser?.interests.join(", ")}
               className="rounded-2xl border border-border bg-background px-4 py-3 outline-none transition focus:border-accent focus:ring-2 focus:ring-accent/15"
             />
-            <button className="rounded-full bg-accent-strong px-5 py-3 font-medium text-white transition hover:brightness-95 active:scale-[0.98]">
+            <SubmitButton
+              pendingLabel={PENDING_LABELS.saveProfile}
+              className="rounded-full bg-accent-strong px-5 py-3 font-medium text-white transition enabled:hover:brightness-95 enabled:active:scale-[0.98]"
+            >
               Save profile
-            </button>
+            </SubmitButton>
           </form>
         </section>
       </div>
