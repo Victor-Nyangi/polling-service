@@ -13,6 +13,9 @@ import {
   parseThemePreference,
 } from "@/lib/theme";
 import type { CurrentUser } from "@/lib/types";
+import { Spinner } from "@/components/spinner";
+import { SubmitButton } from "@/components/submit-button";
+import { PENDING_LABELS } from "@/lib/pending";
 
 function initials(name: string) {
   return name
@@ -48,20 +51,26 @@ async function ThemeToggle() {
           const active = preference === current;
 
           return (
-            <button
+            <SubmitButton
               key={preference}
-              type="submit"
               name="theme"
               value={preference}
               aria-pressed={active}
-              className={`rounded-full px-2.5 py-1 transition max-md:px-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent active:scale-[0.96] ${
+              pendingLabel={PENDING_LABELS.theme}
+              pendingContent={
+                <span className="inline-flex items-center gap-1">
+                  <Spinner className="h-2.5 w-2.5" />
+                  {THEME_LABELS[preference]}
+                </span>
+              }
+              className={`rounded-full px-2.5 py-1 transition max-md:px-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent enabled:active:scale-[0.96] ${
                 active
                   ? "bg-accent/10 font-medium text-accent"
-                  : "text-muted hover:text-foreground"
+                  : "text-muted enabled:hover:text-foreground"
               }`}
             >
               {THEME_LABELS[preference]}
-            </button>
+            </SubmitButton>
           );
         })}
       </div>
@@ -142,9 +151,12 @@ export async function AppShell({
                   {initials(currentUser.displayName)}
                 </div>
                 <form action={signOutAction}>
-                  <button className="rounded-full border border-border px-4 py-2 text-sm font-medium transition active:scale-[0.97]">
+                  <SubmitButton
+                    pendingLabel={PENDING_LABELS.signOut}
+                    className="rounded-full border border-border px-4 py-2 text-sm font-medium transition enabled:active:scale-[0.97]"
+                  >
                     Sign out
-                  </button>
+                  </SubmitButton>
                 </form>
               </>
             ) : (

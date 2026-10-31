@@ -8,6 +8,11 @@ const noticeStyles = {
   info: "border-sky-200 bg-sky-50 text-sky-900 dark:border-sky-900/60 dark:bg-sky-950/40 dark:text-sky-200",
 };
 
+/**
+ * The outcome of an action, rendered by the page the action redirected to.
+ * An error is an alert, so a screen reader breaks in with it; a success or an
+ * info notice is a polite status, read once the reader is free.
+ */
 export function NoticeBanner({ notice }: { notice: Notice | null }) {
   if (!notice) {
     return null;
@@ -15,6 +20,7 @@ export function NoticeBanner({ notice }: { notice: Notice | null }) {
 
   return (
     <div
+      role={notice.type === "error" ? "alert" : "status"}
       className={`rounded-2xl border px-4 py-3 text-sm ${noticeStyles[notice.type]}`}
     >
       {notice.message}

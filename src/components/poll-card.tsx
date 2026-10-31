@@ -1,6 +1,9 @@
 import Link from "next/link";
 import { createReportAction, voteOnPollAction } from "@/app/actions";
+import { Spinner } from "@/components/spinner";
+import { PendingGroup, SubmitButton } from "@/components/submit-button";
 import { INVITE_PARAM, type InviteParam, pollVoteAccess } from "@/lib/invite";
+import { PENDING_LABELS } from "@/lib/pending";
 import {
   HIDDEN_RESULTS_LABEL,
   deadlineLabel,
@@ -143,7 +146,8 @@ export function PollCard({
               .join(" · ")}
           </p>
         ) : null}
-        <div className="mt-4 grid gap-3">
+        {/* One group, so voting one option locks the others until it lands. */}
+        <PendingGroup className="mt-4 grid gap-3">
           {post.poll.options.map((option) => {
             const isSelected = post.poll.viewerVoteOptionId === option.id;
             const tally = (
@@ -182,20 +186,29 @@ export function PollCard({
                 {access === "invite" && invite.kind === "token" ? (
                   <input type="hidden" name={INVITE_PARAM} value={invite.token} />
                 ) : null}
-                <button
-                  type="submit"
-                  className={`rounded-2xl border px-4 py-3 text-left transition active:scale-[0.99] ${
+                <SubmitButton
+                  pendingLabel={PENDING_LABELS.vote}
+                  pendingContent={
+                    <div className="flex items-center justify-between gap-4">
+                      <span>{option.label}</span>
+                      <span className="inline-flex items-center gap-2 font-mono text-sm text-accent">
+                        <Spinner />
+                        {PENDING_LABELS.vote}
+                      </span>
+                    </div>
+                  }
+                  className={`rounded-2xl border px-4 py-3 text-left transition enabled:active:scale-[0.99] aria-busy:border-accent ${
                     isSelected
                       ? "border-accent bg-accent/10"
-                      : "border-border bg-card hover:border-accent/50"
+                      : "border-border bg-card enabled:hover:border-accent/50"
                   }`}
                 >
                   {tally}
-                </button>
+                </SubmitButton>
               </form>
             );
           })}
-        </div>
+        </PendingGroup>
       </div>
 
       <div className="mt-5 flex flex-wrap gap-3 text-sm">
@@ -208,9 +221,12 @@ export function PollCard({
             name="reason"
             value="Reported from the poll card quick-action flow."
           />
-          <button className="rounded-full border border-border px-4 py-2 transition hover:border-accent/50 active:scale-[0.96]">
+          <SubmitButton
+            pendingLabel={PENDING_LABELS.report}
+            className="rounded-full border border-border px-4 py-2 transition enabled:hover:border-accent/50 enabled:active:scale-[0.96]"
+          >
             Report
-          </button>
+          </SubmitButton>
         </form>
       </div>
     </article>

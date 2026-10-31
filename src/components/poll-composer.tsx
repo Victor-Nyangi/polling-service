@@ -7,6 +7,8 @@ import {
   type PollPreset,
 } from "@/lib/poll-presets";
 import type { CurrentUser } from "@/lib/types";
+import { SubmitButton } from "@/components/submit-button";
+import { PENDING_LABELS } from "@/lib/pending";
 
 const PARTICIPATION_CHOICES = [
   {
@@ -215,12 +217,12 @@ export function PollComposer({
             Requires auth when Supabase is connected. In demo mode, submissions
             show the intended flow without persistence.
           </p>
-          <button
-            type="submit"
-            className="rounded-full bg-accent-strong px-5 py-3 text-sm font-medium text-white transition hover:brightness-95 active:scale-[0.98]"
+          <SubmitButton
+            pendingLabel={PENDING_LABELS.publish}
+            className="shrink-0 rounded-full bg-accent-strong px-5 py-3 text-sm font-medium text-white transition enabled:hover:brightness-95 enabled:active:scale-[0.98]"
           >
             {preset.id === "round" ? "Publish round" : "Publish poll"}
-          </button>
+          </SubmitButton>
         </div>
       </form>
     </section>
